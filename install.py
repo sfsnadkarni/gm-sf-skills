@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Installs the sf-translation skill to ~/.claude/skills/sf-translation/.
+Installs all GM Salesforce skills to ~/.claude/skills/.
 
 Usage:
   python3 install.py
@@ -10,39 +10,41 @@ import shutil
 import subprocess
 import sys
 
-SKILL_NAME = "sf-translation"
-INSTALL_DIR = os.path.expanduser(f"~/.claude/skills/{SKILL_NAME}")
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
+SKILLS = [
+    {
+        "name": "sf-translation",
+        "src":  SCRIPT_DIR,                                    # files at repo root
+        "files": ["SKILL.md", "requirements.txt", "README.md"],
+    },
+    {
+        "name": "sf-translation-verify",
+        "src":  os.path.join(SCRIPT_DIR, "sf-translation-verify"),
+        "files": ["SKILL.md", "requirements.txt"],
+    },
+]
 
-def run(cmd, check=True):
-    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-    if check and result.returncode != 0:
-        print(f"ERROR: {result.stderr or result.stdout}")
-        sys.exit(1)
-    return result
 
+def install_skill(skill: dict):
+    name     = skill["name"]
+    src_dir  = skill["src"]
+    dst_dir  = os.path.expanduser(f"~/.claude/skills/{name}")
 
-def main():
-    print(f"Installing {SKILL_NAME} to {INSTALL_DIR} ...")
+    print(f"\nInstalling {name} → {dst_dir}")
+    os.makedirs(dst_dir, exist_ok=True)
 
-    # Create destination
-    os.makedirs(INSTALL_DIR, exist_ok=True)
-
-    # Copy all skill files
-    files_to_copy = ["SKILL.md", "requirements.txt", "README.md"]
-    for filename in files_to_copy:
-        src = os.path.join(SCRIPT_DIR, filename)
-        dst = os.path.join(INSTALL_DIR, filename)
+    # Copy individual files
+    for filename in skill["files"]:
+        src = os.path.join(src_dir, filename)
+        dst = os.path.join(dst_dir, filename)
         if os.path.isfile(src):
             shutil.copy2(src, dst)
             print(f"  Copied {filename}")
-        else:
-            print(f"  Skipping {filename} (not found)")
 
-    # Copy scripts directory
-    scripts_src = os.path.join(SCRIPT_DIR, "scripts")
-    scripts_dst = os.path.join(INSTALL_DIR, "scripts")
+    # Copy scripts/ directory
+    scripts_src = os.path.join(src_dir, "scripts")
+    scripts_dst = os.path.join(dst_dir, "scripts")
     if os.path.isdir(scripts_src):
         if os.path.exists(scripts_dst):
             shutil.rmtree(scripts_dst)
@@ -50,19 +52,30 @@ def main():
         print(f"  Copied scripts/")
 
     # Install Python dependencies
-    print("\nInstalling Python dependencies...")
-    req_file = os.path.join(INSTALL_DIR, "requirements.txt")
-    result = run(f'pip3 install -r "{req_file}" -q', check=False)
-    if result.returncode != 0:
-        print(f"  WARNING: pip3 install failed: {result.stderr[:200]}")
-        print("  Run manually: pip3 install pandas openpyxl")
-    else:
-        print("  Dependencies installed.")
+    req_file = os.path.join(dst_dir, "requirements.txt")
+    if os.path.isfile(req_file):
+        result = subprocess.run(
+            f'pip3 install -r "{req_file}" -q',
+            shell=True, capture_output=True, text=True
+        )
+        if result.returncode != 0:
+            print(f"  WARNING: pip3 install failed — run manually: pip3 install pandas openpyxl")
+        else:
+            print(f"  Dependencies installed.")
 
-    print(f"\nInstallation complete.")
-    print(f"Usage: /sf-translation Vehicle")
-    print(f"       /sf-translation Case")
-    print(f"       /sf-translation Account")
+
+def main():
+    for skill in SKILLS:
+        install_skill(skill)
+
+    print("\nInstallation complete.")
+    print("\nUsage:")
+    print("  /sf-translation Vehicle          — generate STF translation files")
+    print("  /sf-translation Case")
+    print("  /sf-translation Account")
+    print()
+    print("  /sf-translation-verify Vehicle   — verify translations against master sheet")
+    print("  /sf-translation-verify Case")
 
 
 if __name__ == "__main__":
