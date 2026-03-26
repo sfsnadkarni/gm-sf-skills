@@ -1,16 +1,30 @@
-# sf-translation
+# GM Salesforce Skills
 
-A Claude Code skill that generates Salesforce STF translation files (Spanish / Portuguese Brazil) for any Salesforce object, by comparing org field metadata against a master translation Excel sheet.
+Claude Code skills for generating and verifying Salesforce STF translation files.
 
 ## Installation
 
 ```bash
-git clone <your-repo-url> sf-translation
-cd sf-translation
+git clone https://github.com/sfsnadkarni/gm-sf-skills.git
+cd gm-sf-skills
 python3 install.py
 ```
 
-## Usage
+## Updating
+
+```bash
+cd gm-sf-skills
+git pull
+python3 install.py
+```
+
+---
+
+## Skills
+
+### `/sf-translation [Object]`
+
+Connects to a Salesforce org, extracts all custom fields and picklist values for the given object, matches them against a master Excel translation sheet, and generates STF files ready to upload to Translation Workbench.
 
 ```
 /sf-translation Vehicle
@@ -18,32 +32,74 @@ python3 install.py
 /sf-translation Account
 ```
 
-## Prerequisites
+**What it asks for:**
+- Which Salesforce org to use (shows authenticated orgs to pick from)
+- Path to Master Excel Sheet
+- Output directory (default: `~/Desktop/sf-translation-output`)
+- Optional: existing Spanish bilingual STF (to skip already-translated entries)
+- Optional: existing Portuguese bilingual STF (to skip already-translated entries)
 
-- **Salesforce CLI** (`sf`) — [Install](https://developer.salesforce.com/tools/salesforcecli)
-- **Python 3** — standard on macOS/Linux
-- **pandas + openpyxl** — auto-installed by `install.py`
-
-## Master Excel Sheet format
-
-| Column | Header | Content |
-|--------|--------|---------|
-| A | Object Name | e.g. `Vehicle`, `Account` |
-| B | Field Type | e.g. `Custom Field`, `Picklist Value` |
-| **C** | **Field Name** | **English label — matched against** |
-| **D** | **Spanish Translation** | **Output for `_es.stf`** |
-| **E** | **Portuguese Translation** | **Output for `_pt_BR.stf`** |
-
-Row 1 is a header row. Data starts at row 2.
-
-## Output files
+**Output files:**
 
 | File | Description |
 |------|-------------|
-| `[Object]_intermediate.xlsx` | Field/picklist inventory from org |
-| `[Object]_es.stf` | Spanish translations |
-| `[Object]_pt_BR.stf` | Portuguese (Brazil) translations |
-| `[Object]_miss_report.csv` | Fields with no translation found |
+| `[Object]_intermediate.xlsx` | Field/picklist inventory pulled from org |
+| `[Object]_es.stf` | Spanish translations — upload to Translation Workbench |
+| `[Object]_pt_BR.stf` | Portuguese (Brazil) translations — upload to Translation Workbench |
+| `[Object]_miss_report.csv` | Fields not found in master sheet or with empty/multi-value translations |
+
+---
+
+### `/sf-translation-verify [Object]`
+
+After uploading an STF to Salesforce, download the Bilingual STF from Translation Workbench and run this skill to verify the translations are correct. Compares what is in the org against the master Excel sheet and produces a color-coded Excel report.
+
+```
+/sf-translation-verify Vehicle
+/sf-translation-verify Case
+/sf-translation-verify Account
+```
+
+**What it asks for:**
+- Path to Master Excel Sheet
+- Output directory (default: `~/Desktop/sf-translation-output`)
+- Optional: Spanish Bilingual STF downloaded from org
+- Optional: Portuguese Bilingual STF downloaded from org
+
+**Output file:**
+
+| File | Description |
+|------|-------------|
+| `[Object]_verification.xlsx` | Color-coded comparison: Match / Mismatch / Not in Master |
+
+**Color coding:**
+
+| Color | Meaning |
+|-------|---------|
+| Green | ✓ Translation in org matches master sheet |
+| Red | ✗ Translation in org differs from master sheet |
+| Yellow | ⚠ Translated in org but label not found in master sheet |
+| Grey | — In master sheet but not yet translated in org |
+
+---
+
+## Prerequisites
+
+- **Python 3** — standard on macOS/Linux
+- **pandas + openpyxl** — auto-installed by `install.py`
+- **Salesforce CLI** (`sf`) — used if available; falls back to stored credentials in `~/.sfdx/` automatically
+
+## Master Excel Sheet format
+
+| Column | Content |
+|--------|---------|
+| A | Object Name |
+| B | Field Type (`Custom Field`, `Picklist Value`, etc.) |
+| **C** | **English label / picklist value — matched against** |
+| **D** | **Spanish Translation** |
+| **E** | **Portuguese (Brazil) Translation** |
+
+Row 1 is a header. Data starts at row 2.
 
 ## STF key formats
 
