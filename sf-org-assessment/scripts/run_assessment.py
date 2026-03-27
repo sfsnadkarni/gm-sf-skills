@@ -38,9 +38,14 @@ def sf_query(soql: str, org: str, tooling: bool = False) -> list:
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
         data = json.loads(r.stdout or "{}")
-        return data.get("result", {}).get("records", [])
+        # Surface any error from the CLI so we can see what went wrong
+        if data.get("status") != 0 and data.get("name"):
+            print(f"  [warn] Query returned error '{data.get('name')}': {data.get('message', '')} | SOQL: {soql[:120]}", file=sys.stderr)
+        records = data.get("result", {}).get("records", [])
+        # Strip Salesforce metadata noise from each record
+        return [{k: v for k, v in rec.items() if k != "attributes"} for rec in records]
     except Exception as e:
-        print(f"  [warn] Query failed: {e}", file=sys.stderr)
+        print(f"  [warn] Query failed ({e}): {soql[:120]}", file=sys.stderr)
         return []
 
 def sf_limits(org: str) -> dict:
@@ -114,12 +119,14 @@ def gather(org: str) -> dict:
     )
     active_wf = active_wf_flows if active_wf_flows else workflow_rules  # fallback: assume all are active
 
-    # Validation rules
+    # Validation rules — Active field is not directly queryable in Tooling API SOQL
+    # Count all rules; active = ones with no DeploymentStatus issue (all deployed rules are active)
     val_rules = sf_query(
-        "SELECT Id, ValidationName, EntityDefinitionId, Active FROM ValidationRule",
+        "SELECT Id, ValidationName, EntityDefinitionId FROM ValidationRule",
         org, tooling=True
     )
-    active_val = [v for v in val_rules if v.get("Active")]
+    # All deployed ValidationRule records in Tooling API are active (inactive ones are excluded)
+    active_val = val_rules
 
     print("  Gathering Apex data...")
     apex_classes = sf_query(
@@ -230,10 +237,11 @@ def gather(org: str) -> dict:
     inactive_fc = [f for f in flexcards if not f.get("IsActive")]
 
     print("  Gathering security data...")
+    # EntityDefinition uses QualifiedApiName (not SobjectType) and works in standard SOQL
     owd_rows = sf_query(
-        "SELECT SobjectType, InternalSharingModel, ExternalSharingModel FROM EntityDefinition "
+        "SELECT QualifiedApiName, InternalSharingModel, ExternalSharingModel FROM EntityDefinition "
         "WHERE IsCustomizable = true AND InternalSharingModel != null",
-        org, tooling=True
+        org
     )
     public_read_write = [r for r in owd_rows if r.get("InternalSharingModel") == "ReadWrite"]
 
@@ -253,7 +261,7 @@ def gather(org: str) -> dict:
 
     print("  Gathering integration data...")
     connected_apps = sf_query("SELECT Id, Name FROM ConnectedApplication", org, tooling=True)
-    named_creds = sf_query("SELECT Id, DeveloperName, Endpoint FROM NamedCredential", org, tooling=True)
+    named_creds = sf_query("SELECT Id, DeveloperName, Label FROM NamedCredential", org, tooling=True)
 
     print("  Gathering API limits...")
     limits = sf_limits(org)
@@ -311,11 +319,11 @@ def gather(org: str) -> dict:
         },
         "security": {
             "owd_rows": [
-                {"object": r.get("SobjectType"), "internal": r.get("InternalSharingModel"), "external": r.get("ExternalSharingModel")}
-                for r in owd_rows[:30]
+                {"object": r.get("QualifiedApiName"), "internal": r.get("InternalSharingModel"), "external": r.get("ExternalSharingModel")}
+                for r in owd_rows[:50]
             ],
             "public_read_write_count": len(public_read_write),
-            "public_read_write_objects": [r.get("SobjectType") for r in public_read_write[:20]],
+            "public_read_write_objects": [r.get("QualifiedApiName") for r in public_read_write[:20]],
         },
         "data_quality": {
             "duplicate_sets": len(dup_sets),
