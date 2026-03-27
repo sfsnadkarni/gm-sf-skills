@@ -90,26 +90,29 @@ def gather(org: str) -> dict:
     ]
 
     print("  Gathering automation data...")
+    # FlowDefinitionView — one row per flow definition, IsActive is a boolean
     flows = sf_query(
-        "SELECT Id, MasterLabel, ProcessType, Status, VersionNumber, Description FROM FlowDefinitionView",
+        "SELECT Id, MasterLabel, ProcessType, IsActive, VersionNumber, Description FROM FlowDefinitionView",
         org
     )
-    # Separate active flow versions
-    active_flows = [f for f in flows if f.get("Status") == "Active"]
-    inactive_flows = [f for f in flows if f.get("Status") in ("Obsolete", "Draft", "InvalidDraft")]
+    active_flows   = [f for f in flows if f.get("IsActive") is True]
+    inactive_flows = [f for f in flows if f.get("IsActive") is False]
 
     # Flows missing descriptions
-    flows_no_desc = [f for f in flows if not f.get("Description", "").strip()]
+    flows_no_desc = [f for f in flows if not (f.get("Description") or "").strip()]
 
-    # Workflow rules
+    # Workflow rules — active flag lives on the Flow object in Tooling API, not WorkflowRule
+    # Count all WorkflowRule records; any presence is a finding (deprecated automation)
     workflow_rules = sf_query(
-        "SELECT Id, Name, TableEnumOrId FROM WorkflowRule",
+        "SELECT Id, Name FROM WorkflowRule",
         org, tooling=True
     )
-    active_wf = sf_query(
-        "SELECT Id, Name FROM WorkflowRule WHERE Metadata.active = true",
+    # Active workflow rules: query Flow where ProcessType = 'Workflow' and Status = 'Active'
+    active_wf_flows = sf_query(
+        "SELECT Id, Name FROM Flow WHERE ProcessType = 'Workflow' AND Status = 'Active'",
         org, tooling=True
     )
+    active_wf = active_wf_flows if active_wf_flows else workflow_rules  # fallback: assume all are active
 
     # Validation rules
     val_rules = sf_query(
