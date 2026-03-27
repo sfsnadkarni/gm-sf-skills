@@ -161,26 +161,73 @@ def gather(org: str) -> dict:
     perm_sets = sf_query("SELECT Id, Name FROM PermissionSet WHERE IsOwnedByProfile = false", org)
 
     print("  Gathering OmniStudio metadata...")
+    # OmniStudio objects differ by deployment type:
+    #   Native OmniStudio (no namespace): OmniScript, OmniDataTransform, OmniUiCard
+    #   Vlocity managed package:          vlocity_cmt__OmniScript__c, vlocity_cmt__OmniDataTransform__c, vlocity_cmt__FlexCard__c
+    # Integration Procedures are stored as OmniScript records with Type = 'IntegrationProcedure'
+
+    # --- OmniScripts ---
     omniscripts = sf_query(
-        "SELECT Id, Name, Type, SubType, Language, IsActive, VersionNumber FROM OmniScript",
+        "SELECT Id, Name, Type, SubType, Language, IsActive, VersionNumber FROM OmniScript WHERE Type != 'IntegrationProcedure'",
         org
     )
-    active_os = [o for o in omniscripts if o.get("IsActive")]
+    if not omniscripts:
+        omniscripts = sf_query(
+            "SELECT Id, Name, vlocity_cmt__Type__c, vlocity_cmt__IsActive__c, vlocity_cmt__Version__c "
+            "FROM vlocity_cmt__OmniScript__c WHERE vlocity_cmt__Type__c != 'IntegrationProcedure'",
+            org
+        )
+        # Normalize field names
+        omniscripts = [{"IsActive": r.get("vlocity_cmt__IsActive__c"), "Name": r.get("Name")} for r in omniscripts]
+
+    active_os   = [o for o in omniscripts if o.get("IsActive")]
     inactive_os = [o for o in omniscripts if not o.get("IsActive")]
 
+    # --- Integration Procedures ---
     integration_procs = sf_query(
-        "SELECT Id, Name, IsActive, VersionNumber FROM OmniIntegrationProcedure",
+        "SELECT Id, Name, IsActive, VersionNumber FROM OmniScript WHERE Type = 'IntegrationProcedure'",
         org
     )
-    active_ips = [i for i in integration_procs if i.get("IsActive")]
+    if not integration_procs:
+        integration_procs = sf_query(
+            "SELECT Id, Name, vlocity_cmt__IsActive__c FROM vlocity_cmt__OmniScript__c "
+            "WHERE vlocity_cmt__Type__c = 'IntegrationProcedure'",
+            org
+        )
+        integration_procs = [{"IsActive": r.get("vlocity_cmt__IsActive__c"), "Name": r.get("Name")} for r in integration_procs]
+
+    active_ips   = [i for i in integration_procs if i.get("IsActive")]
     inactive_ips = [i for i in integration_procs if not i.get("IsActive")]
 
+    # --- DataRaptors ---
     data_raptors = sf_query(
         "SELECT Id, Name, InterfaceType, IsActive FROM OmniDataTransform",
         org
     )
-    active_drs = [d for d in data_raptors if d.get("IsActive")]
+    if not data_raptors:
+        data_raptors = sf_query(
+            "SELECT Id, Name, vlocity_cmt__InterfaceType__c, vlocity_cmt__IsActive__c FROM vlocity_cmt__OmniDataTransform__c",
+            org
+        )
+        data_raptors = [{"IsActive": r.get("vlocity_cmt__IsActive__c"), "Name": r.get("Name")} for r in data_raptors]
+
+    active_drs   = [d for d in data_raptors if d.get("IsActive")]
     inactive_drs = [d for d in data_raptors if not d.get("IsActive")]
+
+    # --- FlexCards ---
+    flexcards = sf_query(
+        "SELECT Id, Name, IsActive, VersionNumber FROM OmniUiCard",
+        org
+    )
+    if not flexcards:
+        flexcards = sf_query(
+            "SELECT Id, Name, vlocity_cmt__Active__c FROM vlocity_cmt__FlexCard__c",
+            org
+        )
+        flexcards = [{"IsActive": r.get("vlocity_cmt__Active__c"), "Name": r.get("Name")} for r in flexcards]
+
+    active_fc   = [f for f in flexcards if f.get("IsActive")]
+    inactive_fc = [f for f in flexcards if not f.get("IsActive")]
 
     print("  Gathering security data...")
     owd_rows = sf_query(
@@ -252,6 +299,9 @@ def gather(org: str) -> dict:
             "data_raptors_total": len(data_raptors),
             "data_raptors_active": len(active_drs),
             "data_raptors_inactive": len(inactive_drs),
+            "flexcards_total": len(flexcards),
+            "flexcards_active": len(active_fc),
+            "flexcards_inactive": len(inactive_fc),
         },
         "metadata": {
             "custom_objects": len(custom_objects),
@@ -323,6 +373,7 @@ def mock_data() -> dict:
             "omniscripts_total": 18, "omniscripts_active": 12, "omniscripts_inactive": 6,
             "integration_procs_total": 34, "integration_procs_active": 22, "integration_procs_inactive": 12,
             "data_raptors_total": 47, "data_raptors_active": 31, "data_raptors_inactive": 16,
+            "flexcards_total": 22, "flexcards_active": 16, "flexcards_inactive": 6,
         },
         "metadata": {"custom_objects": 42, "custom_fields": 310, "profiles": 18, "permission_sets": 34},
         "security": {
@@ -550,9 +601,9 @@ def build_html(d: dict, health_score: int, findings: list, notes: str, org_alias
 
     # --- OmniStudio chart data ---
     os_data = d["omnistudio"]
-    omni_labels = json.dumps(["OmniScripts", "Integration Procedures", "DataRaptors"])
-    omni_active = json.dumps([os_data["omniscripts_active"], os_data["integration_procs_active"], os_data["data_raptors_active"]])
-    omni_inactive = json.dumps([os_data["omniscripts_inactive"], os_data["integration_procs_inactive"], os_data["data_raptors_inactive"]])
+    omni_labels = json.dumps(["OmniScripts", "Integration Procedures", "DataRaptors", "FlexCards"])
+    omni_active = json.dumps([os_data["omniscripts_active"], os_data["integration_procs_active"], os_data["data_raptors_active"], os_data["flexcards_active"]])
+    omni_inactive = json.dumps([os_data["omniscripts_inactive"], os_data["integration_procs_inactive"], os_data["data_raptors_inactive"], os_data["flexcards_inactive"]])
 
     # --- API usage ---
     api_max  = d["api_limits"]["daily_api_max"]
@@ -732,10 +783,16 @@ def build_html(d: dict, health_score: int, findings: list, notes: str, org_alias
           <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb">{os_data["integration_procs_total"]}</td>
         </tr>
         <tr>
-          <td style="padding:10px 12px">DataRaptors</td>
-          <td style="padding:10px 12px;color:#22c55e;font-weight:700">{os_data["data_raptors_active"]}</td>
-          <td style="padding:10px 12px;color:{'#f97316' if os_data['data_raptors_inactive'] > 10 else '#6b7280'}">{os_data["data_raptors_inactive"]}</td>
-          <td style="padding:10px 12px">{os_data["data_raptors_total"]}</td>
+          <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb">DataRaptors</td>
+          <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;color:#22c55e;font-weight:700">{os_data["data_raptors_active"]}</td>
+          <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;color:{'#f97316' if os_data['data_raptors_inactive'] > 10 else '#6b7280'}">{os_data["data_raptors_inactive"]}</td>
+          <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb">{os_data["data_raptors_total"]}</td>
+        </tr>
+        <tr>
+          <td style="padding:10px 12px">FlexCards</td>
+          <td style="padding:10px 12px;color:#22c55e;font-weight:700">{os_data["flexcards_active"]}</td>
+          <td style="padding:10px 12px;color:{'#f97316' if os_data['flexcards_inactive'] > 5 else '#6b7280'}">{os_data["flexcards_inactive"]}</td>
+          <td style="padding:10px 12px">{os_data["flexcards_total"]}</td>
         </tr>
       </table>
       <p style="font-size:12px;color:#6b7280;margin-top:12px">Best practice: retain active + 1 prior version; delete older versions.</p>
