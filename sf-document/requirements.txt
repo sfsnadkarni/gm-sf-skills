@@ -1,0 +1,2 @@
+# No third-party dependencies — uses only Python stdlib
+# (urllib, xml.etree, base64, json, re, os, sys)

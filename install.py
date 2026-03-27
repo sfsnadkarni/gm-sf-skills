@@ -23,6 +23,11 @@ SKILLS = [
         "src":  os.path.join(SCRIPT_DIR, "sf-translation-verify"),
         "files": ["SKILL.md", "requirements.txt"],
     },
+    {
+        "name": "sf-document",
+        "src":  os.path.join(SCRIPT_DIR, "sf-document"),
+        "files": ["SKILL.md", "requirements.txt"],
+    },
 ]
 
 
@@ -76,6 +81,9 @@ def main():
     print()
     print("  /sf-translation-verify Vehicle   — verify translations against master sheet")
     print("  /sf-translation-verify Case")
+    print()
+    print("  /sf-document 'Lock Unlock Omniscript'   — generate implementation documentation")
+    print("  /sf-document 'Case Transfer Flow'")
 
 
 if __name__ == "__main__":
