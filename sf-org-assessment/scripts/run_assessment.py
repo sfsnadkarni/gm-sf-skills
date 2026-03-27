@@ -55,8 +55,17 @@ def sf_limits(org: str) -> dict:
             capture_output=True, text=True, timeout=30
         )
         data = json.loads(r.stdout or "{}")
-        return data.get("result", {})
-    except Exception:
+        result = data.get("result", {})
+        # SF CLI returns result as a list of {name, max, remaining} objects
+        if isinstance(result, list):
+            return {
+                item["name"]: {"Max": item.get("max", 0), "Remaining": item.get("remaining", 0)}
+                for item in result if "name" in item
+            }
+        # Older CLI versions return a dict keyed by limit name with {Max, Remaining}
+        return result
+    except Exception as e:
+        print(f"  [warn] sf_limits failed: {e}", file=sys.stderr)
         return {}
 
 def sf_org_display(org: str) -> dict:
