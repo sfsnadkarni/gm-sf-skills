@@ -58,19 +58,27 @@ def build_stf_header(language_code: str, language_name: str) -> str:
     )
 
 
-def build_custom_labels_xml(labels: list) -> str:
+def build_custom_labels_xml(labels: list, object_name: str) -> str:
     """
     Build a .labels-meta.xml string for new custom labels.
 
-    labels: list of {derived_api_name, raw_title}
+    labels: list of {derived_api_name, raw_title, component_type}
+    categories naming convention: Onstar:{Object}:{ComponentType}:{ComponentName}
     """
+    seen = set()
     items = []
     for label in labels:
-        api  = label["derived_api_name"]
-        eng  = label["raw_title"].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        api = label["derived_api_name"]
+        if api in seen:
+            continue
+        seen.add(api)
+        eng           = label["raw_title"].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        comp_type     = label.get("component_type", "Tab")  # Tab or RelatedList
+        category      = f"Onstar:{object_name}:{comp_type}:{label['raw_title']}"
         items.append(
             f"    <labels>\n"
             f"        <fullName>{api}</fullName>\n"
+            f"        <categories>{category}</categories>\n"
             f"        <language>en_US</language>\n"
             f"        <protected>false</protected>\n"
             f"        <shortDescription>{eng}</shortDescription>\n"
@@ -142,7 +150,7 @@ def main():
     xml_file = None
     if plain_matched:
         xml_file = os.path.join(args.output, f"{args.object_name}_new_custom_labels.labels-meta.xml")
-        xml_content = build_custom_labels_xml(plain_matched)
+        xml_content = build_custom_labels_xml(plain_matched, args.object_name)
         with open(xml_file, "w", encoding="utf-8") as f:
             f.write(xml_content)
 
