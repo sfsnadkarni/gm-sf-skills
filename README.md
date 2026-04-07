@@ -1,67 +1,53 @@
 # GM Salesforce Skills
 
-Claude Code skills for Salesforce translation, verification, and implementation documentation.
+Python tools for Salesforce translation, verification, and implementation documentation.
 
 ---
 
 ## Prerequisites
 
-Before installing, you need two things:
-
-### 1. Claude Account
-You need a [claude.ai](https://claude.ai) account (Pro or above — Claude Code is included).
-
-### 2. Claude Code CLI
-Install the Claude Code command-line tool:
-
-```bash
-npm install -g @anthropic-ai/claude-code
-```
-
-Then authenticate with your Claude account (**not an API key**):
-
-```bash
-claude
-```
-
-When prompted, choose **"Login with Claude.ai"** and log in via the browser with your claude.ai credentials. You only need to do this once per machine.
-
-> If you see a prompt asking for an **API key** — ignore it. Choose the **"Login with Claude.ai"** option instead.
+- **Python 3** — standard on macOS/Linux
+- **Salesforce CLI** (`sf`) — [install here](https://developer.salesforce.com/tools/salesforcecli)
+- **openpyxl** — auto-installed on first run
 
 ---
 
-## Installation
+## Quick Start
 
-Once Claude Code is set up, clone the repo anywhere on your machine — it does not need to be inside a Salesforce project. The installer puts everything in `~/.claude/skills/` which is global to your user account.
+Clone the repo anywhere on your machine — it does not need to be inside a Salesforce project:
 
 ```bash
 git clone https://github.com/sfsnadkarni/gm-sf-skills.git
 cd gm-sf-skills
-python3 install.py
+python3 run.py --list
 ```
 
-> **Already inside another project?** That's fine. Run these commands from anywhere — even your Desktop. The skills are installed globally and work across all projects.
+No Claude account required. No API keys. Just Python and the Salesforce CLI.
 
-## Updating
+---
+
+## Usage
 
 ```bash
-cd gm-sf-skills
-git pull
-python3 install.py
+python3 run.py sf-translation Vehicle
+python3 run.py sf-translation-v2 Vehicle
+python3 run.py sf-translation-verify Vehicle
+python3 run.py sf-org-assessment
 ```
+
+The tool will prompt you for everything it needs — org, file paths, output directory.
 
 ---
 
 ## Skills
 
-### `/sf-translation [Object]`
+### `sf-translation <Object>`
 
 Connects to a Salesforce org, extracts all custom fields and picklist values for the given object, matches them against a master Excel translation sheet, and generates STF files ready to upload to Translation Workbench.
 
-```
-/sf-translation Vehicle
-/sf-translation Case
-/sf-translation Account
+```bash
+python3 run.py sf-translation Vehicle
+python3 run.py sf-translation Case
 ```
 
 **What it asks for:**
@@ -82,14 +68,34 @@ Connects to a Salesforce org, extracts all custom fields and picklist values for
 
 ---
 
-### `/sf-translation-verify [Object]`
+### `sf-translation-v2 <Object>`
 
-After uploading an STF to Salesforce, download the Bilingual STF from Translation Workbench and run this skill to verify the translations are correct. Compares what is in the org against the master Excel sheet and produces a color-coded Excel report.
+Everything in `sf-translation` plus Lightning Record Page (LRP) support — translates tab labels and related list labels via custom label STF entries.
 
+```bash
+python3 run.py sf-translation-v2 Vehicle
 ```
-/sf-translation-verify Vehicle
-/sf-translation-verify Case
-/sf-translation-verify Account
+
+**Additional inputs (v2):**
+- Optional: local Salesforce repo path — used to find the LRP flexipage XML
+
+**Additional output files (v2):**
+
+| File | Description |
+|------|-------------|
+| `[Object]_labels_es.stf` | Spanish custom label translations |
+| `[Object]_labels_pt_BR.stf` | Portuguese custom label translations |
+| `[Object]_lrp_miss_report.csv` | LRP labels with no translation found |
+| `[Object]_new_custom_labels.labels-meta.xml` | New custom labels to deploy (only if tabs use plain text instead of `{!$Label.X}`) |
+
+---
+
+### `sf-translation-verify <Object>`
+
+After uploading an STF to Salesforce, download the Bilingual STF from Translation Workbench and run this to verify translations are correct. Compares what is in the org against the master Excel sheet and produces a color-coded Excel report.
+
+```bash
+python3 run.py sf-translation-verify Vehicle
 ```
 
 **What it asks for:**
@@ -115,53 +121,48 @@ After uploading an STF to Salesforce, download the Bilingual STF from Translatio
 
 ---
 
-### `/sf-document [Component or Description]`
+### `sf-org-assessment`
 
-Generates implementation documentation from Salesforce metadata in a local repo or GitHub. Supports two modes:
+Runs a full health assessment on a Salesforce org and generates an HTML report with a score and breakdown of users, flows, automation, Apex, OmniStudio components, security settings, and API limits.
 
-**Mode 1 — Integration Flow** (give it a component name):
-Traces how a specific component works end-to-end — OmniScript → Integration Procedures → Apex → external API → callback → Salesforce records. Includes a Mermaid diagram pasteable into Lucidchart.
-
+```bash
+python3 run.py sf-org-assessment
 ```
-/sf-document Lock Unlock Omniscript
-/sf-document Care_CreateDraftDealerCase
-```
-
-**Mode 2 — Scope of Change** (paste Jira/TA notes):
-Paste a Jira story or TA notes and the skill finds every Salesforce component impacted by the change — flows, validation rules, layouts, flexipages, permission sets. Generates a plain-English document explaining what was built and why, written for someone who was not in the design meetings.
-
-```
-/sf-document
-> [paste your Jira story or TA notes]
-```
-
-**What it asks for:**
-- Local repo path (e.g. `~/Documents/GM - Onstar Project/OCRM_219315_salesforce`) — or GitHub repo + token
-- Branch (default: `tst`)
-- Output directory (default: `~/Desktop/sf-translation-output`)
-
-**Output file:**
-
-| File | Description |
-|------|-------------|
-| `[Name]_documentation.md` | Implementation doc — ready to paste into SharePoint or Confluence |
 
 ---
 
-## Other Prerequisites
+## Updating
 
-- **Python 3** — standard on macOS/Linux
-- **pandas + openpyxl** — auto-installed by `install.py`
-- **Salesforce CLI** (`sf`) — used by the translation skills if available; falls back to stored credentials in `~/.sfdx/` automatically
+```bash
+cd gm-sf-skills
+git pull
+```
 
-## Master Excel Sheet format (sf-translation)
+No reinstall needed — `run.py` always reads scripts from the repo directly.
+
+---
+
+## Master Excel Sheet format
 
 | Column | Content |
 |--------|---------|
 | A | Object Name |
-| B | Field Type (`Custom Field`, `Picklist Value`, etc.) |
-| **C** | **English label / picklist value — matched against** |
+| B | Field Type |
+| **C** | **English label — matched against** |
 | **D** | **Spanish Translation** |
 | **E** | **Portuguese (Brazil) Translation** |
 
 Row 1 is a header. Data starts at row 2.
+
+---
+
+## Claude Code users
+
+If you use Claude Code, run `python3 install.py` to install the skills as slash commands:
+
+```bash
+python3 install.py
+# then use as:
+# /sf-translation Vehicle
+# /sf-translation-v2 Vehicle
+```
