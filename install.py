@@ -12,6 +12,52 @@ import sys
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
+
+def check_prerequisites():
+    """Check that Claude Code is installed and authenticated before installing skills."""
+    print("Checking prerequisites...\n")
+
+    # ── 1. Check Claude Code is installed ─────────────────────────────────────
+    result = subprocess.run(["which", "claude"], capture_output=True, text=True)
+    if result.returncode != 0:
+        print("ERROR: Claude Code is not installed.")
+        print()
+        print("  Install it from: https://claude.ai/code")
+        print("  Or via npm:  npm install -g @anthropic-ai/claude-code")
+        print()
+        sys.exit(1)
+
+    print("  ✓ Claude Code is installed")
+
+    # ── 2. Check Claude Code is authenticated ─────────────────────────────────
+    claude_dir   = os.path.expanduser("~/.claude")
+    auth_markers = [
+        os.path.join(claude_dir, "credentials.json"),
+        os.path.join(claude_dir, ".credentials.json"),
+        os.path.join(claude_dir, "settings.json"),
+    ]
+    authenticated = any(os.path.isfile(p) for p in auth_markers)
+
+    if not authenticated:
+        print()
+        print("  ✗ Claude Code is not authenticated yet.")
+        print()
+        print("  ─────────────────────────────────────────────────────────────")
+        print("  ACTION REQUIRED — Log in with your Claude account:")
+        print()
+        print("    1. Run:  claude")
+        print("    2. When prompted, choose: 'Login with Claude.ai'")
+        print("       (do NOT enter an API key)")
+        print("    3. A browser window will open — log in with your")
+        print("       Claude account (the same one you use on claude.ai)")
+        print("    4. Come back here and re-run:  python3 install.py")
+        print("  ─────────────────────────────────────────────────────────────")
+        print()
+        sys.exit(1)
+
+    print("  ✓ Claude Code is authenticated")
+    print()
+
 SKILLS = [
     {
         "name": "sf-translation",
@@ -80,6 +126,7 @@ def install_skill(skill: dict):
 
 
 def main():
+    check_prerequisites()
     for skill in SKILLS:
         install_skill(skill)
 

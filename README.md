@@ -2,9 +2,37 @@
 
 Claude Code skills for Salesforce translation, verification, and implementation documentation.
 
+---
+
+## Prerequisites
+
+Before installing, you need two things:
+
+### 1. Claude Account
+You need a [claude.ai](https://claude.ai) account (Pro or above — Claude Code is included).
+
+### 2. Claude Code CLI
+Install the Claude Code command-line tool:
+
+```bash
+npm install -g @anthropic-ai/claude-code
+```
+
+Then authenticate with your Claude account (**not an API key**):
+
+```bash
+claude
+```
+
+When prompted, choose **"Login with Claude.ai"** and log in via the browser with your claude.ai credentials. You only need to do this once per machine.
+
+> If you see a prompt asking for an **API key** — ignore it. Choose the **"Login with Claude.ai"** option instead.
+
+---
+
 ## Installation
 
-Clone the repo anywhere on your machine — it does not need to be inside a Salesforce project. The installer puts everything in `~/.claude/skills/` which is global to your user account.
+Once Claude Code is set up, clone the repo anywhere on your machine — it does not need to be inside a Salesforce project. The installer puts everything in `~/.claude/skills/` which is global to your user account.
 
 ```bash
 git clone https://github.com/sfsnadkarni/gm-sf-skills.git
@@ -120,11 +148,11 @@ Paste a Jira story or TA notes and the skill finds every Salesforce component im
 
 ---
 
-## Prerequisites
+## Other Prerequisites
 
 - **Python 3** — standard on macOS/Linux
 - **pandas + openpyxl** — auto-installed by `install.py`
-- **Salesforce CLI** (`sf`) — used by sf-translation if available; falls back to stored credentials in `~/.sfdx/` automatically
+- **Salesforce CLI** (`sf`) — used by the translation skills if available; falls back to stored credentials in `~/.sfdx/` automatically
 
 ## Master Excel Sheet format (sf-translation)
 
