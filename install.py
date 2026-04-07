@@ -33,6 +33,11 @@ SKILLS = [
         "src":  os.path.join(SCRIPT_DIR, "sf-org-assessment"),
         "files": ["SKILL.md"],
     },
+    {
+        "name": "sf-translation-v2",
+        "src":  os.path.join(SCRIPT_DIR, "sf-translation-v2"),
+        "files": ["SKILL.md", "requirements.txt"],
+    },
 ]
 
 
@@ -91,6 +96,9 @@ def main():
     print("  /sf-document 'Case Transfer Flow'")
     print()
     print("  /sf-org-assessment                      — assess org health and generate HTML report")
+    print()
+    print("  /sf-translation-v2 Vehicle              — generate STF + custom label translations (LRP support)")
+    print("  /sf-translation-v2 Case")
 
 
 if __name__ == "__main__":
