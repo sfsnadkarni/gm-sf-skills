@@ -148,7 +148,7 @@ def select_org(scripts_dir):
     for i, org in enumerate(orgs, 1):
         alias    = org.get("alias", "")
         username = org.get("username", "")
-        status   = org.get("connectedStatus", "")
+        status   = org.get("connectedStatus", "").splitlines()[0]  # first line only
         display  = f"{alias}  ({username})" if alias else username
         print(f"    {i}. {display}  —  {status}")
     print(f"    0. Connect a new org")
