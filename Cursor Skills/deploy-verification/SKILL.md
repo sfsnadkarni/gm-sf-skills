@@ -184,6 +184,12 @@ For each story in JIRA_LIST found in COPADO_LIST → add to **MATCHED_LIST** wit
 ### Cross-Reference E — Matched (NoCop auto-match)
 For each story in JIRA_NOCOP_LIST → add to **NOCOP_MATCHED_LIST** with `note = "NoCop"`
 
+> **⚠️ CRITICAL:** NoCop stories MUST appear in **TWO** places:
+> 1. **Matched tab** — with Note = "NoCop" and green highlight (they are considered matched/accounted for)
+> 2. **NoCop Excluded tab** — for reference/visibility
+>
+> Do NOT put NoCop stories only in the NoCop Excluded tab. They MUST also be in Matched.
+
 ### Cross-Reference F — Excluded From Copado (SF Team stories)
 After building the initial MISSING_LIST (non-NoCop, non-QE, non-Cancelled):
 
@@ -304,30 +310,34 @@ Footer: `Total Matched = X  (Regular: X  |  NoCop: X  |  ExcludedFromCopado: X)`
 
 ### TAB 5: Not in Release
 
-Columns: `User Story # | Copado Title | External ID (Jira Key) | Developer | Promotion Name | Parent Feature | Story Fix Version | Parent Fix Version | Version Mismatch? | Note`
+> **⚠️ CRITICAL — DO NOT SKIP:** This tab requires **two additional Jira queries** to populate `Story Fix Version` and `Parent Fix Version`. These columns are mandatory — do not omit them or substitute with other columns (e.g. "Parent Status" or "Reason"). Run both queries before generating the Excel script.
+
+Columns (exactly in this order): `User Story # | Copado Title | External ID (Jira Key) | Developer | Promotion Name | Parent Feature | Story Fix Version | Parent Fix Version | Version Mismatch? | Note`
 
 Populate from EXTRA_LIST. Note = "In Copado but NOT in signed-off Jira features for this release"
 
-**Fix version data required (two separate queries):**
-1. **Story Fix Version** — fetch `fixVersions` on each extra story directly:
-   ```
-   issue in (SDPOCC-XXXX, ...) fields: key, fixVersions
-   ```
-   Save as `story_fix_versions` map.
+**Required Jira queries BEFORE writing the Excel script:**
 
-2. **Parent Feature** — fetch `parent` field on each extra story:
-   ```
-   issue in (SDPOCC-XXXX, ...) fields: key, parent
-   ```
-   Then fetch `fixVersions` on all unique parent keys.
-   Save as `parent_fix_versions` map and `story_to_parent` map.
+**Query 1 — Story Fix Version** (fetch on all extra Jira keys in one batch):
+```
+issue in (SDPOCC-XXXX, SDPOCC-YYYY, ...) fields: key, fixVersions, parent
+```
+- Save `story_fix_versions` map: `key → comma-joined fixVersion names` (or `"None set"` if empty)
+- Save `story_to_parent` map: `key → parent.key`
+
+**Query 2 — Parent Fix Version** (fetch on all unique parent keys from Query 1):
+```
+issue in (PARENT_KEY_1, PARENT_KEY_2, ...) fields: key, fixVersions
+```
+- Save `parent_fix_versions` map: `parent_key → comma-joined fixVersion names` (or `"None set"` if empty)
 
 **Version Mismatch column:**
-- Compare `story_fix_ver.strip()` vs `parent_fix_ver.strip()`
-- If different → `"YES ⚠️"`, highlight entire row RED (#FFCCCC)
+- Look up `story_fix_ver` from `story_fix_versions[jira_key]`
+- Look up `parent_fix_ver` from `parent_fix_versions[story_to_parent[jira_key]]`
+- If `story_fix_ver.strip() != parent_fix_ver.strip()` → `"YES ⚠️"`, highlight entire row RED (#FFCCCC)
 - If same → `"No"`, alternating gray/white
 
-> **Why both?** The story's own fix version may have been updated by the team (e.g., moved to 4/21) while the parent ART Feature is still on an older release (e.g., 3/17). Showing both columns immediately flags mismatches.
+> **Why both?** The story's own fix version may have been updated (e.g., moved to 4/21) while the parent ART Feature is still on an older release (e.g., 3/17). Showing both columns immediately flags mismatches.
 
 If empty → single centered row: "✅ Package is clean — no extra stories found"
 Footer: `Total Extra = X`
@@ -350,10 +360,18 @@ issue in (batch_of_50_keys) fields: key, fixVersions
 ```
 Show as comma-separated version names, or `"None set"` if empty.
 
-**Team column logic (check in order):**
-1. If `summary` contains `"Test Only"` → `"Test Only Feature"` (no special highlight — uses alternating rows)
-2. If assignee name contains `(C)` → `"Salesforce Team; needs attention"` + highlight row YELLOW (#FFF9C4)
-3. Otherwise → `"Autobots team"`
+**Team column logic (check in EXACTLY this order — do not reorder):**
+
+> **⚠️ CRITICAL:** The exact Team label values are `"Test Only Feature"`, `"Salesforce Team; needs attention"`, and `"Autobots team"`. Do NOT use "Contractor", "SF Team", or any other label.
+
+1. **FIRST** — If `summary` contains the text `"Test Only"` (case-sensitive) → Team = `"Test Only Feature"` (alternating row color, no yellow)
+2. **SECOND** — If assignee `displayName` contains `" (C)"` (i.e. contractor marker) → Team = `"Salesforce Team; needs attention"` + highlight row YELLOW (#FFF9C4)
+3. **OTHERWISE** → Team = `"Autobots team"`
+
+Example:
+- Summary = "SF - Test Only - Case Transfers" + assignee has `(C)` → Team = **"Test Only Feature"** (rule 1 wins)
+- Summary = "SF - Translation Spanish" + assignee has `(C)` → Team = **"Salesforce Team; needs attention"** (rule 2)
+- Summary = "SF - Some Story" + assignee has no `(C)` → Team = **"Autobots team"** (rule 3)
 
 **Copado US Name column:** From COPADO_SF_LOOKUP — the `US-XXXXXXX` Copado record name(s) for SF Team stories. Comma-join if multiple. Blank if story not found in Copado or not a SF Team story.
 
