@@ -184,7 +184,22 @@ For each story in JIRA_LIST found in COPADO_LIST → add to **MATCHED_LIST** wit
 ### Cross-Reference E — Matched (NoCop auto-match)
 For each story in JIRA_NOCOP_LIST → add to **NOCOP_MATCHED_LIST** with `note = "NoCop"`
 
-Combined: **ALL_MATCHED = MATCHED_LIST + NOCOP_MATCHED_LIST**
+### Cross-Reference F — Excluded From Copado (SF Team stories)
+After building the initial MISSING_LIST (non-NoCop, non-QE, non-Cancelled):
+
+1. Identify all stories where Team = "Salesforce Team; needs attention" (assignee contains `(C)`)
+2. Query Copado for those stories in batches:
+   ```sql
+   SELECT Id, Name, Exclude_from_Copado__c, copado__Environment__r.Name,
+          copado__Promote_Change__c, copadoccmint__External_Id__c
+   FROM copado__User_Story__c
+   WHERE copadoccmint__External_Id__c IN ('KEY1', 'KEY2', ...)
+   ```
+3. Build **COPADO_SF_LOOKUP** map: `external_id → list of {name, environment}` (one story may appear in multiple environments — comma-join them)
+4. If `Exclude_from_Copado__c = true` → move story to **EXCLUDE_MATCHED_LIST** (remove from MISSING_LIST), `note = "ExcludedFromCopado"`
+5. Stories NOT found in Copado at all → remain in MISSING_LIST with blank Copado US Name and Environment
+
+Combined: **ALL_MATCHED = MATCHED_LIST + NOCOP_MATCHED_LIST + EXCLUDE_MATCHED_LIST**
 
 ---
 
@@ -219,6 +234,7 @@ This is required to write files outside the workspace (e.g. `~/Desktop/`). Use `
 | Extra/Not-in-Release rows | #FFF3E0 (light orange) |
 | Version mismatch rows (Not in Release) | #FFCCCC (red) |
 | NoCop matched rows | #E8F5E9 (light green) |
+| ExcludedFromCopado matched rows | #E3F2FD (light blue) |
 | Salesforce Team rows (Not in Package) | #FFF9C4 (light yellow) |
 | Alternating rows | #F5F5F5 / white |
 
@@ -239,8 +255,10 @@ Summary table:
 | Copado Package Stories | X | |
 | ✅ Matched (in Copado) | X | 🟢 Good |
 | ✅ Matched (NoCop — not required in Copado) | X | 🟢 Good |
+| ✅ Matched (Excluded from Copado flag) | X | 🟢 Good |
 | 🔴 Extra in Copado (Not in Release) | X | 🔴 Action Required OR 🟢 Clean |
 | ⚠️ Missing from Copado | X | 🔴 Action Required OR 🟢 Clean |
+|   — of which Test Only Feature | X | ℹ️ Sub-count of above |
 | ⚠️ Not Ready to Promote | X | 🔴 Action Required OR 🟢 Clean |
 
 Deployment Readiness banner:
@@ -274,12 +292,13 @@ Footer: `Total = X | Not Ready = X`
 
 Columns: `Jira Key | Jira Summary | Jira Status | User Story # | Copado Title | Ready to Promote | Developer | Promotion | Note`
 
-Populate from ALL_MATCHED (regular + NoCop).
+Populate from ALL_MATCHED (regular + NoCop + ExcludedFromCopado).
 - NoCop rows → Note = "NoCop", Copado columns = "N/A (NoCop)", highlight GREEN (#E8F5E9)
+- ExcludedFromCopado rows → Note = "ExcludedFromCopado", highlight LIGHT BLUE (#E3F2FD)
 - Not Ready to Promote rows → highlight ORANGE (#FFF3E0)
 - Regular rows → alternating gray/white
 
-Footer: `Total Matched = X  (Regular: X  |  NoCop: X)`
+Footer: `Total Matched = X  (Regular: X  |  NoCop: X  |  ExcludedFromCopado: X)`
 
 ---
 
@@ -317,9 +336,9 @@ Footer: `Total Extra = X`
 
 ### TAB 6: Not in Package
 
-Columns: `Jira Key | Summary | Type | Status | Fix Version | Parent Feature | Parent Summary | Assignee | Priority | Team`
+Columns: `Jira Key | Summary | Type | Status | Fix Version | Parent Feature | Parent Summary | Assignee | Priority | Team | Copado US Name | Environment`
 
-Populate from MISSING_LIST.
+Populate from MISSING_LIST (after ExcludedFromCopado stories have been split out in Step 6F).
 
 **Pre-filter MISSING_LIST before rendering (silently exclude):**
 1. Stories where `summary` starts with `"QE - Manual Testing"` — these are QE task tickets that will never be in a Copado package
@@ -331,12 +350,17 @@ issue in (batch_of_50_keys) fields: key, fixVersions
 ```
 Show as comma-separated version names, or `"None set"` if empty.
 
-**Team column logic:**
-- If assignee name contains `(C)` → `"Salesforce Team; needs attention"` + highlight row YELLOW (#FFF9C4)
-- Otherwise → `"Autobots team"`
+**Team column logic (check in order):**
+1. If `summary` contains `"Test Only"` → `"Test Only Feature"` (no special highlight — uses alternating rows)
+2. If assignee name contains `(C)` → `"Salesforce Team; needs attention"` + highlight row YELLOW (#FFF9C4)
+3. Otherwise → `"Autobots team"`
+
+**Copado US Name column:** From COPADO_SF_LOOKUP — the `US-XXXXXXX` Copado record name(s) for SF Team stories. Comma-join if multiple. Blank if story not found in Copado or not a SF Team story.
+
+**Environment column:** From COPADO_SF_LOOKUP — the `copado__Environment__r.Name` value(s). Comma-join if multiple. Blank if not found.
 
 If empty → single centered row: "✅ All Jira stories are included in the Copado package"
-Footer: `Total Missing = X  |  Salesforce Team: X  |  Autobots: X`
+Footer: `Total Missing = X  |  Salesforce Team: X  |  Autobots: X  |  Test Only Feature: X`
 
 ---
 
@@ -391,3 +415,34 @@ Action Items:
 
 Open the Excel file to review all details.
 ```
+
+---
+
+## 🚧 Future Enhancements (Not Yet Built)
+
+### Prod Bug & Regression Bug Verification
+
+Add two optional inputs to Step 1:
+- **Prod Bug Fix Version** — Jira fix version for querying production bugs
+- **Regression Bug Fix Version** — Jira fix version for querying regression bugs
+
+**Query:** For each, fetch Defects where:
+```
+project = SDPOCC
+AND issuetype = Defect
+AND fixVersion = "BUG_FIX_VERSION"
+AND status = Completed
+AND "GM Defect State Reason" = "Ready to Deploy"
+```
+
+**Cross-reference logic:**
+| Condition | Destination |
+|-----------|-------------|
+| Status = Completed + Ready to Deploy + **NoCop tag** | → **Matched** tab (note = "NoCop") |
+| Status = Completed + Ready to Deploy + **found in Copado** | → **Matched** tab |
+| Status = Completed + Ready to Deploy + **NOT in Copado** | → New tab: **Bugs Not in Package** |
+
+**New tab: Bugs Not in Package**
+- Separate from the existing "Not in Package" (ART Feature children)
+- Columns: `Jira Key | Summary | Type | Fix Version | Assignee | Team | Copado US Name | Environment`
+- Same Team routing logic as "Not in Package" tab
