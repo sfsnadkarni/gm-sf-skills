@@ -160,11 +160,21 @@ For each provided bilingual file (`EXISTING_ES`, `EXISTING_ES_CO`, `EXISTING_PT`
 
 2. **`untranslated`** — keys in the OUTDATED/UNTRANSLATED section that are relevant to this object.
    - An untranslated data line has 2 columns: `KEY\tSOURCE_LABEL`. Store `{KEY: SOURCE_LABEL}`.
-   - Only collect keys that are relevant:
-     - `CustomField.<OBJECT_NAME>.*`
-     - `PicklistValue.<OBJECT_NAME>.*`
-     - `PicklistValue.*__gvs.*` (Global Value Sets — included in the same file, not separate)
-     - The specific LRP `CustomLabel.*` keys identified in Step 7 (not all custom labels — only those from the selected flexipages)
+   - **CRITICAL — strict object filter. The bilingual STF contains keys for every object in the org. You MUST filter to only Case-relevant keys.** Use this exact logic in Python:
+     ```python
+     key_parts = key.split('.')
+     key_type   = key_parts[0]   # e.g. CustomField, PicklistValue, CustomLabel
+     key_object = key_parts[1]   # e.g. Case, Knowledge__c, Account__c
+     is_target = (key_object == OBJECT_NAME)                          # e.g. 'Case'
+     is_gvs    = (key_type == 'PicklistValue' and '__gvs' in key_object)
+     if not (is_target or is_gvs):
+         continue   # DROP — wrong object
+     ```
+   - Accepted key prefixes after filtering:
+     - `CustomField.Case.*`
+     - `PicklistValue.Case.*`
+     - `PicklistValue.*__gvs.*` (Global Value Sets — go in the same file, not separate)
+     - `CustomLabel.*` — only the specific labels identified from the LRP flexipages in Step 7 (added later when appending LRP entries; do NOT include all org custom labels here)
 
 ### 6b: Match source labels against master sheet and write output
 
