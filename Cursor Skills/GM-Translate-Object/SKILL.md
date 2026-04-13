@@ -190,14 +190,24 @@ Translation type: Metadata
 - Skip if the key already exists in the existing STF (already translated).
 - Write as `<key>\t<translation>\n` (tab-separated, UTF-8).
 
+**Bilingual validation (CRITICAL — prevents import errors):**
+
+Before writing any STF file, parse every provided bilingual STF (`EXISTING_ES`, `EXISTING_ES_CO`, `EXISTING_PT`) to build a set of **all valid keys** the org recognises. Parse ALL lines (both TRANSLATED and OUTDATED/UNTRANSLATED sections): for each line containing a tab that does not start with `#`, strip leading `-` or `*` characters and whitespace, then take the text before the first tab as the key.
+
+Since all three bilingual files come from the same org they share the same valid key set — use any one of them (prefer whichever is provided). Store as `VALID_KEYS`.
+
+After generating candidate lines for a language, **drop any line whose key is not in `VALID_KEYS`**. Track dropped keys as `bilingual_filtered` and report their count. This prevents "key's translation type must match the file's translation type" import errors caused by keys that belong to Global Value Sets or other incompatible metadata types.
+
+If no bilingual file is provided for any language, skip this filter and warn the user that import errors may occur.
+
 Generate:
-- `OUTPUT_DIR/OBJECT_NAME_es.stf` (parse `EXISTING_ES` for already-translated keys)
-- `OUTPUT_DIR/OBJECT_NAME_es_CO.stf` — Spanish (Colombia), same Spanish translations from Col D, language code `es_CO` (parse `EXISTING_ES_CO` for already-translated keys)
-- `OUTPUT_DIR/OBJECT_NAME_pt_BR.stf` (parse `EXISTING_PT` for already-translated keys)
+- `OUTPUT_DIR/OBJECT_NAME_es.stf` (parse `EXISTING_ES` for already-translated keys; use bilingual for key validation)
+- `OUTPUT_DIR/OBJECT_NAME_es_CO.stf` — Spanish (Colombia), same Spanish translations from Col D, language code `es_CO` (parse `EXISTING_ES_CO` for already-translated keys; use bilingual for key validation)
+- `OUTPUT_DIR/OBJECT_NAME_pt_BR.stf` (parse `EXISTING_PT` for already-translated keys; use bilingual for key validation)
 
 The STF header for Spanish Colombia uses `Language code: es_CO` and `# Language: Spanish (Colombia)`. All other header fields are identical to the Spanish STF.
 
-Report written/skipped counts per language.
+Report written/skipped/filtered counts per language.
 
 ---
 
@@ -266,7 +276,7 @@ Do this for **all** labels — both `custom_label` components and `already_exist
 
 **Translation fallback rule:** When a label has an existing org translation but is not found in the master sheet — use the org translation as a fallback rather than flagging as a miss. Only flag as a miss if both master sheet AND org translation are empty.
 
-**Load existing label keys from STF files** (if provided): same parsing logic as Step 6, but only collect keys starting with `customLabel.`.
+**Load existing label keys from STF files** (if provided): same parsing logic as Step 6, but only collect keys starting with `CustomLabel.`.
 
 ### Step 7c: Classify and match labels
 
@@ -289,10 +299,10 @@ Do this for **all** labels — both `custom_label` components and `already_exist
 
 Regenerate (overwrite) the STF files completely rather than appending, so that LRP entries are cleanly included alongside the field/picklist entries. The `es_CO` file gets the same custom label translations as the `es` file (same Spanish source column).
 
-For each language, write `customLabel.<api_name>\t<translation>\n` for:
-1. `custom_label` components where `write_es`/`write_pt` is True — key = `customLabel.<label_api_name>`.
-2. `already_existing` plain_text components where `write_es`/`write_pt` is True — key = `customLabel.<actual_org_label_name>`.
-3. `plain_new_matched` components where `write_es`/`write_pt` is True — key = `customLabel.<derived_api_name>`.
+For each language, write `CustomLabel.<api_name>\t<translation>\n` for:
+1. `custom_label` components where `write_es`/`write_pt` is True — key = `CustomLabel.<label_api_name>`.
+2. `already_existing` plain_text components where `write_es`/`write_pt` is True — key = `CustomLabel.<actual_org_label_name>`.
+3. `plain_new_matched` components where `write_es`/`write_pt` is True — key = `CustomLabel.<derived_api_name>`.
 
 Deduplicate keys before writing.
 
