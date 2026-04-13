@@ -29,10 +29,12 @@ Ask the user for the following **in a single message**:
 
 1. **Master Excel Sheet path** — translation reference. The correct sheet is **Sheet1** with columns: `Object Name | Field Type | Field Name | Spanish Translation | Portuguese Translation`. Col C (index 2) = English, Col D (index 3) = Spanish, Col E (index 4) = Portuguese. Always load with `sheet_name='Sheet1'` — do not rely on the default first tab (it is often a pivot/summary).
 2. **Output directory** — where to save all generated files. Default: `~/Desktop/sf-translation-output`. Press Enter to use default.
-3. **(Optional) Existing Spanish STF** — a previously downloaded Bilingual STF for Spanish; already-translated keys are skipped. Press Enter to skip.
-4. **(Optional) Existing Spanish Colombia STF** — a previously downloaded Bilingual STF for Spanish (Colombia); already-translated keys are skipped. Press Enter to skip.
-5. **(Optional) Existing Portuguese STF** — a previously downloaded Bilingual STF for Portuguese; already-translated keys are skipped. Press Enter to skip.
-Store as: `MASTER_PATH`, `OUTPUT_DIR`, `EXISTING_ES`, `EXISTING_ES_CO`, `EXISTING_PT`.
+3. **Bilingual STF for Spanish (Colombia)** — download from Translation Workbench and provide path. This is the **source of truth** for which keys are valid and which are already translated. Strongly recommended; warn if skipped.
+4. **Bilingual STF for Portuguese (Brazil)** — same as above for pt_BR. Strongly recommended; warn if skipped.
+5. **(Optional) Bilingual STF for Spanish (es)** — only needed if generating a separate `es` STF. Press Enter to skip.
+Store as: `MASTER_PATH`, `OUTPUT_DIR`, `EXISTING_ES_CO`, `EXISTING_PT`, `EXISTING_ES`.
+
+> **Why bilingual files are required:** The bilingual STF exported from Translation Workbench is the definitive list of keys the org accepts for this object. Keys not in the bilingual cause Salesforce import errors ("key's translation type must match"). The bilingual also tells us which keys are already translated so we don't overwrite them.
 
 If the user skips output directory, use `~/Desktop/sf-translation-output`.
 
@@ -144,23 +146,42 @@ Save to `OUTPUT_DIR/OBJECT_NAME_matches.json`. Report matched/unmatched counts.
 
 ---
 
-## Step 6: Generate Field/Picklist STF Files
+## Step 6: Generate STF Files
 
-**Parse existing STF files** (if provided) to collect already-translated keys:
-- Read the STF file line by line.
-- Detect file type from the `Type:` header line.
-- For a **Bilingual** file: only collect keys from the TRANSLATED section; stop collecting when the OUTDATED/UNTRANSLATED section begins.
-  - **Important:** The section delimiters use many dashes, e.g. `------------------TRANSLATED-------------------` and `OUT OF DATE AND UNTRANSLATED`. Do NOT match `--- TRANSLATED ---` literally. Instead, strip all `-` characters from the line, `.strip().upper()`, and check if the result equals `"TRANSLATED"` to enter the translated section. To exit, check if `"OUTDATED"` and `"UNTRANSLATED"` are both in the uppercased stripped line.
-- For any other type (Translation, Source): collect all data line keys.
-- A data line has a tab character; the key is everything before the first tab.
+The output format is **Bilingual** — the same format as the provided bilingual STF inputs. Salesforce imports bilingual files with translations filled in. Do NOT generate Source-type STFs.
 
-**Build STF content** for Spanish (`es`) and Portuguese (`pt_BR`):
+### 6a: Parse the bilingual STF(s) as the source of truth
 
-STF header format:
+For each provided bilingual file (`EXISTING_ES`, `EXISTING_ES_CO`, `EXISTING_PT`), parse it into two structures:
+
+1. **`translated_keys`** — keys in the TRANSLATED section (already done in org, skip these).
+   - Detect section: strip all `-` from line, `.strip().upper()` → equals `"TRANSLATED"` → enter translated section. Exit when `"OUTDATED"` and `"UNTRANSLATED"` both appear.
+   - A translated data line has ≥3 tab-separated columns: `KEY\tSOURCE\tTRANSLATION\t-`. Store `KEY` (col 0).
+
+2. **`untranslated`** — keys in the OUTDATED/UNTRANSLATED section that are relevant to this object.
+   - An untranslated data line has 2 columns: `KEY\tSOURCE_LABEL`. Store `{KEY: SOURCE_LABEL}`.
+   - Only collect keys that are relevant:
+     - `CustomField.<OBJECT_NAME>.*`
+     - `PicklistValue.<OBJECT_NAME>.*`
+     - `PicklistValue.*__gvs.*` (Global Value Sets — included in the same file, not separate)
+     - The specific LRP `CustomLabel.*` keys identified in Step 7 (not all custom labels — only those from the selected flexipages)
+
+### 6b: Match source labels against master sheet and write output
+
+For each key in `untranslated`:
+- Skip if key is in `translated_keys` (already in org).
+- Look up `SOURCE_LABEL` (lowercased) in the master sheet lookup dict → get translation.
+- Skip if not found in master, or translation is empty, or multi-value (contains a comma), or exceeds 40 characters.
+- **Do NOT skip if translation equals the source label** — trust the master sheet. Brand names and acronyms that stay the same (e.g. BBIVA → BBIVA) are valid translations.
+- Write in **4-column bilingual format**: `KEY\tSOURCE_LABEL\tTRANSLATION\t-`
+
+### 6c: Output format
+
+**Bilingual STF header:**
 ```
-# Use the Source file to translate labels for the first time.
-# - Change the language code in the header from the organization's default language to the translation language.
-# - Replace the untranslated values in the LABEL column with translated values.
+# Use the Bilingual file to review translations, edit labels that have already been translated, and add translations for labels that haven't been translated.
+# - The TRANSLATED section of the file contains the text that has been translated and needs to be reviewed.
+# - The OUTDATED AND UNTRANSLATED section of the file contains text that hasn't been translated. You can replace untranslated labels in the LABEL column with translated values.
 
 # Notes:
 # Don't add columns to or remove columns from this file.
@@ -168,46 +189,27 @@ STF header format:
 # Lines that begin with the # symbol are ignored during import.
 # Salesforce translation files are exported in the UTF-8 encoding.
 
-# Language: Spanish
-Language code: es
-Type: Source
+# Language: Spanish (Colombia)
+Language code: es_CO
+Type: Bilingual
 Translation type: Metadata
 
-# KEY	LABEL
+------------------TRANSLATED-------------------
+
+# KEY	LABEL	TRANSLATION	OUT OF DATE
 
 ```
 
-(Use `pt_BR` / `Portuguese (Brazil)` for the Portuguese file.)
-
-**STF key formats:**
-- Field label: `CustomField.<OBJECT_NAME>.<stf_field_name>.FieldLabel`
-- Picklist value: `PicklistValue.<OBJECT_NAME>.<stf_field_name>.<picklist_value>`
-
-**Rules:**
-- Skip if translation is empty.
-- Skip if translation is multi-value (contains a comma).
-- Skip if the translation exceeds **40 characters** — add to miss report with Reason "Translation exceeds 40 characters".
-- Skip if the key already exists in the existing STF (already translated).
-- Write as `<key>\t<translation>\n` (tab-separated, UTF-8).
-
-**Bilingual validation (CRITICAL — prevents import errors):**
-
-Before writing any STF file, parse every provided bilingual STF (`EXISTING_ES`, `EXISTING_ES_CO`, `EXISTING_PT`) to build a set of **all valid keys** the org recognises. Parse ALL lines (both TRANSLATED and OUTDATED/UNTRANSLATED sections): for each line containing a tab that does not start with `#`, strip leading `-` or `*` characters and whitespace, then take the text before the first tab as the key.
-
-Since all three bilingual files come from the same org they share the same valid key set — use any one of them (prefer whichever is provided). Store as `VALID_KEYS`.
-
-After generating candidate lines for a language, **drop any line whose key is not in `VALID_KEYS`**. Track dropped keys as `bilingual_filtered` and report their count. This prevents "key's translation type must match the file's translation type" import errors caused by keys that belong to Global Value Sets or other incompatible metadata types.
-
-If no bilingual file is provided for any language, skip this filter and warn the user that import errors may occur.
+(Adjust language name and code per language. Use `es` / `Spanish`, `es_CO` / `Spanish (Colombia)`, `pt_BR` / `Portuguese (Brazil)`.)
 
 Generate:
-- `OUTPUT_DIR/OBJECT_NAME_es.stf` (parse `EXISTING_ES` for already-translated keys; use bilingual for key validation)
-- `OUTPUT_DIR/OBJECT_NAME_es_CO.stf` — Spanish (Colombia), same Spanish translations from Col D, language code `es_CO` (parse `EXISTING_ES_CO` for already-translated keys; use bilingual for key validation)
-- `OUTPUT_DIR/OBJECT_NAME_pt_BR.stf` (parse `EXISTING_PT` for already-translated keys; use bilingual for key validation)
+- `OUTPUT_DIR/OBJECT_NAME_es.stf` — Spanish (use `EXISTING_ES` bilingual; if not provided, use es_CO bilingual as key reference with no already-translated skip)
+- `OUTPUT_DIR/OBJECT_NAME_es_CO.stf` — Spanish Colombia (use `EXISTING_ES_CO` bilingual)
+- `OUTPUT_DIR/OBJECT_NAME_pt_BR.stf` — Portuguese (use `EXISTING_PT` bilingual)
 
-The STF header for Spanish Colombia uses `Language code: es_CO` and `# Language: Spanish (Colombia)`. All other header fields are identical to the Spanish STF.
+GVS picklist values (`PicklistValue.*__gvs.*`) go in the **same file** as the object's field/picklist entries — do not create a separate GVS file.
 
-Report written/skipped/filtered counts per language.
+Report written/skipped counts per language.
 
 ---
 
