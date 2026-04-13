@@ -148,86 +148,45 @@ Save to `OUTPUT_DIR/OBJECT_NAME_matches.json`. Report matched/unmatched counts.
 
 ## Step 6: Generate STF Files
 
-The output format is **Bilingual** — the same format as the provided bilingual STF inputs. Salesforce imports bilingual files with translations filled in. Do NOT generate Source-type STFs.
+**Do NOT write Python code for this step.** Use the committed script `generate_stf.py` from this repository. This ensures consistent, deterministic output every time.
 
-### 6a: Parse the bilingual STF(s) as the source of truth
+### 6a: Download the script
 
-For each provided bilingual file (`EXISTING_ES`, `EXISTING_ES_CO`, `EXISTING_PT`), parse it into two structures:
+The script lives alongside this SKILL.md in the repo. It should already be present in the same folder as this file. If not, download it:
 
-1. **`translated_keys`** — keys in the TRANSLATED section (already done in org, skip these).
-   - Detect section: strip all `-` from line, `.strip().upper()` → equals `"TRANSLATED"` → enter translated section. Exit when `"OUTDATED"` and `"UNTRANSLATED"` both appear.
-   - A translated data line has ≥3 tab-separated columns: `KEY\tSOURCE\tTRANSLATION\t-`. Store `KEY` (col 0).
-
-2. **`untranslated`** — keys in the OUTDATED/UNTRANSLATED section that are relevant to this object.
-   - An untranslated data line has 2 columns: `KEY\tSOURCE_LABEL`. Store `{KEY: SOURCE_LABEL}`.
-   - **CRITICAL — strict object filter. The bilingual STF contains keys for every object in the org. You MUST filter to only Case-relevant keys.** Use this exact logic in Python:
-     ```python
-     key_parts = key.split('.')
-     key_type   = key_parts[0]   # e.g. CustomField, PicklistValue, CustomLabel
-     key_object = key_parts[1]   # e.g. Case, Knowledge__c, Account__c
-     is_target = (key_object == OBJECT_NAME)                          # e.g. 'Case'
-     is_gvs    = (key_type == 'PicklistValue' and '__gvs' in key_object)
-     if not (is_target or is_gvs):
-         continue   # DROP — wrong object
-     ```
-   - Accepted key types after filtering (all must have `key_object == OBJECT_NAME` except GVS):
-     | Key Type | Description |
-     |---|---|
-     | `CustomField` | Custom field labels |
-     | `PicklistValue` | Picklist dropdown values (Case fields + GVS `*__gvs`) |
-     | `LayoutSection` | Page layout section headers |
-     | `RecordType` | Record type names |
-     | `QuickAction` | Quick action button labels |
-     | `CustomLabel` | LRP custom labels (only those from selected flexipages — added in Step 7) |
-     | `ButtonOrLink` | Custom button/link labels |
-
-     All other key types (e.g. `StandardField`, `Flow`, `ValidationRule`, etc.) must be dropped.
-
-### 6b: Match source labels against master sheet and write output
-
-For each key in `untranslated`:
-- Skip if key is in `translated_keys` (already in org).
-- Look up `SOURCE_LABEL` (lowercased) in the master sheet lookup dict → get translation.
-- Skip if not found in master, or translation is empty, or multi-value (contains a comma).
-- **CRITICAL — Skip if `len(translation) > 40`. Salesforce rejects translations longer than 40 characters. Do NOT write them to the STF file.** Add them to the miss report instead with Reason "Translation exceeds 40 characters".
-- **Do NOT skip if translation equals the source label** — trust the master sheet. Brand names and acronyms that stay the same (e.g. BBIVA → BBIVA) are valid translations.
-- Write in **4-column bilingual format**: `KEY\tSOURCE_LABEL\tTRANSLATION\t-`
-
-### 6c: Output format
-
-**Bilingual STF header:**
-```
-# Use the Bilingual file to review translations, edit labels that have already been translated, and add translations for labels that haven't been translated.
-# - The TRANSLATED section of the file contains the text that has been translated and needs to be reviewed.
-# - The OUTDATED AND UNTRANSLATED section of the file contains text that hasn't been translated. You can replace untranslated labels in the LABEL column with translated values.
-
-# Notes:
-# Don't add columns to or remove columns from this file.
-# Tabs (\t), new lines (\n) and carriage returns (\r) are represented by special characters in this file.
-# Lines that begin with the # symbol are ignored during import.
-# Salesforce translation files are exported in the UTF-8 encoding.
-
-# Language: Spanish (Colombia)
-Language code: es_CO
-Type: Bilingual
-Translation type: Metadata
-
-------------------TRANSLATED-------------------
-
-# KEY	LABEL	TRANSLATION	OUT OF DATE
-
+```bash
+curl -o /tmp/generate_stf.py \
+  "https://raw.githubusercontent.com/sfsnadkarni/gm-sf-skills/main/Cursor%20Skills/GM-Translate-Object/generate_stf.py"
 ```
 
-(Adjust language name and code per language. Use `es` / `Spanish`, `es_CO` / `Spanish (Colombia)`, `pt_BR` / `Portuguese (Brazil)`.)
+### 6b: Run the script
 
-Generate:
-- `OUTPUT_DIR/OBJECT_NAME_es.stf` — Spanish (use `EXISTING_ES` bilingual; if not provided, use es_CO bilingual as key reference with no already-translated skip)
-- `OUTPUT_DIR/OBJECT_NAME_es_CO.stf` — Spanish Colombia (use `EXISTING_ES_CO` bilingual)
-- `OUTPUT_DIR/OBJECT_NAME_pt_BR.stf` — Portuguese (use `EXISTING_PT` bilingual)
+```bash
+python3 /path/to/generate_stf.py \
+    --object OBJECT_NAME \
+    --master "MASTER_PATH" \
+    --bilingual-es-co "EXISTING_ES_CO" \
+    --bilingual-pt-br "EXISTING_PT" \
+    --output-dir "OUTPUT_DIR"
+```
 
-GVS picklist values (`PicklistValue.*__gvs.*`) go in the **same file** as the object's field/picklist entries — do not create a separate GVS file.
+- Omit `--bilingual-es-co` or `--bilingual-pt-br` if not provided by the user.
+- Add `--bilingual-es "EXISTING_ES"` if the user provided a Spanish (es) bilingual.
+- Add `--lrp-labels "Label1,Label2"` if LRP custom label API names were identified in Step 7.
 
-Report written/skipped counts per language.
+### 6c: What the script does (do not reimplement)
+
+- Parses the bilingual UNTRANSLATED section as the source of truth for keys
+- Strictly filters to `OBJECT_NAME` keys only (+ GVS picklists)
+- Accepted key types: `CustomField`, `PicklistValue`, `LayoutSection`, `RecordType`, `QuickAction`, `CustomLabel`, `ButtonOrLink`
+- Skips keys already in the TRANSLATED section (already done in org)
+- Looks up each source label in the master sheet
+- Skips: not in master, empty, multi-value (comma), or >40 characters
+- **Does NOT skip when translation == source label** (brand names, acronyms are valid)
+- Writes 4-column bilingual format: `KEY\tSOURCE\tTRANSLATION\t-`
+- Generates `<object>_over40_report.txt` for entries that were too long
+
+Report the written/skipped counts shown by the script output.
 
 ---
 
