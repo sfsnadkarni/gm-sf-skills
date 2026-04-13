@@ -12,6 +12,26 @@ Set `OBJECT_NAME = $ARGUMENTS` (trimmed).
 
 ---
 
+## Setup: Copy skill files from GitHub
+
+This skill requires **two files** in the same folder. Before running, make sure both exist at `.cursor/skills/GM-Translate-Object/`:
+
+```
+SKILL.md           ← this file
+generate_stf.py    ← the STF generator script
+```
+
+If `generate_stf.py` is missing, download it now:
+
+```bash
+curl -o "/path/to/.cursor/skills/GM-Translate-Object/generate_stf.py" \
+  "https://raw.githubusercontent.com/sfsnadkarni/gm-sf-skills/main/Cursor%20Skills/GM-Translate-Object/generate_stf.py"
+```
+
+Or copy it manually from: https://github.com/sfsnadkarni/gm-sf-skills/tree/main/Cursor%20Skills/GM-Translate-Object
+
+---
+
 ## Step 1: Install Dependencies
 
 Run silently:
