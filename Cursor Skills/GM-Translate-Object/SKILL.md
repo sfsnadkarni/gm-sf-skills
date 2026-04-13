@@ -188,7 +188,8 @@ For each provided bilingual file (`EXISTING_ES`, `EXISTING_ES_CO`, `EXISTING_PT`
 For each key in `untranslated`:
 - Skip if key is in `translated_keys` (already in org).
 - Look up `SOURCE_LABEL` (lowercased) in the master sheet lookup dict → get translation.
-- Skip if not found in master, or translation is empty, or multi-value (contains a comma), or exceeds 40 characters.
+- Skip if not found in master, or translation is empty, or multi-value (contains a comma).
+- **CRITICAL — Skip if `len(translation) > 40`. Salesforce rejects translations longer than 40 characters. Do NOT write them to the STF file.** Add them to the miss report instead with Reason "Translation exceeds 40 characters".
 - **Do NOT skip if translation equals the source label** — trust the master sheet. Brand names and acronyms that stay the same (e.g. BBIVA → BBIVA) are valid translations.
 - Write in **4-column bilingual format**: `KEY\tSOURCE_LABEL\tTRANSLATION\t-`
 
