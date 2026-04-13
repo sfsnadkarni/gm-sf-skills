@@ -170,11 +170,18 @@ For each provided bilingual file (`EXISTING_ES`, `EXISTING_ES_CO`, `EXISTING_PT`
      if not (is_target or is_gvs):
          continue   # DROP — wrong object
      ```
-   - Accepted key prefixes after filtering:
-     - `CustomField.Case.*`
-     - `PicklistValue.Case.*`
-     - `PicklistValue.*__gvs.*` (Global Value Sets — go in the same file, not separate)
-     - `CustomLabel.*` — only the specific labels identified from the LRP flexipages in Step 7 (added later when appending LRP entries; do NOT include all org custom labels here)
+   - Accepted key types after filtering (all must have `key_object == OBJECT_NAME` except GVS):
+     | Key Type | Description |
+     |---|---|
+     | `CustomField` | Custom field labels |
+     | `PicklistValue` | Picklist dropdown values (Case fields + GVS `*__gvs`) |
+     | `LayoutSection` | Page layout section headers |
+     | `RecordType` | Record type names |
+     | `QuickAction` | Quick action button labels |
+     | `CustomLabel` | LRP custom labels (only those from selected flexipages — added in Step 7) |
+     | `ButtonOrLink` | Custom button/link labels |
+
+     All other key types (e.g. `StandardField`, `Flow`, `ValidationRule`, etc.) must be dropped.
 
 ### 6b: Match source labels against master sheet and write output
 
