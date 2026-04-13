@@ -30,8 +30,9 @@ Ask the user for the following **in a single message**:
 1. **Master Excel Sheet path** — translation reference. The correct sheet is **Sheet1** with columns: `Object Name | Field Type | Field Name | Spanish Translation | Portuguese Translation`. Col C (index 2) = English, Col D (index 3) = Spanish, Col E (index 4) = Portuguese. Always load with `sheet_name='Sheet1'` — do not rely on the default first tab (it is often a pivot/summary).
 2. **Output directory** — where to save all generated files. Default: `~/Desktop/sf-translation-output`. Press Enter to use default.
 3. **(Optional) Existing Spanish STF** — a previously downloaded Bilingual STF for Spanish; already-translated keys are skipped. Press Enter to skip.
-4. **(Optional) Existing Portuguese STF** — a previously downloaded Bilingual STF for Portuguese; already-translated keys are skipped. Press Enter to skip.
-Store as: `MASTER_PATH`, `OUTPUT_DIR`, `EXISTING_ES`, `EXISTING_PT`.
+4. **(Optional) Existing Spanish Colombia STF** — a previously downloaded Bilingual STF for Spanish (Colombia); already-translated keys are skipped. Press Enter to skip.
+5. **(Optional) Existing Portuguese STF** — a previously downloaded Bilingual STF for Portuguese; already-translated keys are skipped. Press Enter to skip.
+Store as: `MASTER_PATH`, `OUTPUT_DIR`, `EXISTING_ES`, `EXISTING_ES_CO`, `EXISTING_PT`.
 
 If the user skips output directory, use `~/Desktop/sf-translation-output`.
 
@@ -52,12 +53,14 @@ Then ask separately:
   ```
   Show all results and let the user **select one or more** flexipages to process.
 
-  **Step B — Retrieve flexipage metadata as JSON.** Do NOT use `sf org retrieve metadata` or `sf project retrieve start` — both require a valid SFDX project directory and will fail in non-SFDX workspaces. Instead, use the **Tooling API REST endpoint directly** (Python `urllib.request`):
+  **Step B — Retrieve flexipage metadata as JSON.** Do NOT use `sf org retrieve metadata` or `sf project retrieve start` — both require a valid SFDX project directory and will fail in non-SFDX workspaces. Instead, use **curl** for each flexipage (more reliable than Python urllib for large payloads):
+  ```bash
+  curl -s -o /tmp/<DeveloperName>_meta.json \
+    -H "Authorization: Bearer <access_token>" \
+    "<instanceUrl>/services/data/v<apiVersion>/tooling/query?q=$(python3 -c "import urllib.parse; print(urllib.parse.quote(\"SELECT Id,DeveloperName,Metadata FROM FlexiPage WHERE DeveloperName='<name>'\"))")"
   ```
-  GET <instanceUrl>/services/data/v<apiVersion>/tooling/query
-      ?q=SELECT+Id,DeveloperName,Metadata+FROM+FlexiPage+WHERE+DeveloperName='<name>'
-  Authorization: Bearer <access_token>
-  ```
+  Then extract the `Metadata` field from the curl response using Python and save it to `/tmp/<DeveloperName>_meta.json`.
+
   **Important:** The access token stored in `~/.sfdx/<username>.json` is often stale and returns 401. Always use the **fresh access token from `sf org list --json`** output — it is in `result.nonScratchOrgs[].accessToken` (or `result.sandboxes[].accessToken`). Find the entry matching `SELECTED_ORG` username.
 
   The Tooling API returns flexipage metadata as a **JSON object** (not XML). Save each flexipage's `Metadata` field to `/tmp/<DeveloperName>_meta.json`. Set `FLEXIPAGE_JSON_FILES` = list of those file paths.
@@ -182,13 +185,17 @@ Translation type: Metadata
 
 **Rules:**
 - Skip if translation is empty.
-- Skip if translation is multi-value (more than one comma).
+- Skip if translation is multi-value (contains a comma).
+- Skip if the translation exceeds **40 characters** — add to miss report with Reason "Translation exceeds 40 characters".
 - Skip if the key already exists in the existing STF (already translated).
 - Write as `<key>\t<translation>\n` (tab-separated, UTF-8).
 
 Generate:
-- `OUTPUT_DIR/OBJECT_NAME_es.stf`
-- `OUTPUT_DIR/OBJECT_NAME_pt_BR.stf`
+- `OUTPUT_DIR/OBJECT_NAME_es.stf` (parse `EXISTING_ES` for already-translated keys)
+- `OUTPUT_DIR/OBJECT_NAME_es_CO.stf` — Spanish (Colombia), same Spanish translations from Col D, language code `es_CO` (parse `EXISTING_ES_CO` for already-translated keys)
+- `OUTPUT_DIR/OBJECT_NAME_pt_BR.stf` (parse `EXISTING_PT` for already-translated keys)
+
+The STF header for Spanish Colombia uses `Language code: es_CO` and `# Language: Spanish (Colombia)`. All other header fields are identical to the Spanish STF.
 
 Report written/skipped counts per language.
 
@@ -230,7 +237,13 @@ For `plain_text` labels, derive a Custom Label API name: strip non-alphanumeric/
 
 ### Step 7b: Query the org for custom label data
 
-Collect all unique `label_api_name` values from `custom_label` components.
+**CRITICAL — Check plain_text labels against org first.** Before classifying any plain_text component as needing a new custom label, query the org to check if a label already exists for it. Many plain-text tab/related list titles are already custom labels in the org but the flexipage is not yet referencing them with `{!$Label...}` syntax.
+
+For every `plain_text` component, derive candidate API names and query `ExternalString`:
+- Derive: `underscore_name` (spaces → underscores, strip special chars), `no_space_name` (remove spaces), and `raw_title` as-is.
+- Query: `SELECT Name, Value FROM ExternalString WHERE Name IN (<all_candidates>)`
+- If a match is found → treat this component as **already_existing** (not a new label). Store the actual org `Name` as the label API name to use. Do NOT add it to the new-labels list.
+- If no match → it is truly a new label candidate.
 
 **Use the Tooling API REST endpoint directly** (same approach as Step 2 — use fresh access token from `sf org list` output, not from the auth file):
 ```python
@@ -247,16 +260,18 @@ def tooling_query(soql, instance_url, access_token, api_version):
 
 **Query existing translations:** Two steps:
 1. `SELECT Id, Name FROM ExternalString WHERE Name IN (<names>)` → map `Id → Name`.
-2. `SELECT ExternalStringId, Language, Value FROM ExternalStringLocalization WHERE ExternalStringId IN (<ids>) AND Language IN ('es', 'pt_BR')` → build `{label_name: {lang: value}}`.
+2. `SELECT ExternalStringId, Language, Value FROM ExternalStringLocalization WHERE ExternalStringId IN (<ids>) AND Language IN ('es', 'es_CO', 'pt_BR')` → build `{label_name: {lang: value}}`.
 
-**Translation fallback rule:** When a custom label has an existing org translation but is not found in the master sheet — use the org translation as a fallback rather than flagging as a miss. Only flag as a miss if both master sheet AND org translation are empty.
+Do this for **all** labels — both `custom_label` components and `already_existing` plain_text components.
+
+**Translation fallback rule:** When a label has an existing org translation but is not found in the master sheet — use the org translation as a fallback rather than flagging as a miss. Only flag as a miss if both master sheet AND org translation are empty.
 
 **Load existing label keys from STF files** (if provided): same parsing logic as Step 6, but only collect keys starting with `customLabel.`.
 
 ### Step 7c: Classify and match labels
 
-**For `custom_label` components:**
-- Check if already translated: `already_es = bool(org_es) or (stf_key in existing_es_label_keys)`. Same for PT.
+**For `custom_label` components AND `already_existing` plain_text components (same logic):**
+- Check if already translated: `already_es = bool(org_es) or (stf_key in existing_es_label_keys)`. Same for ES_CO, PT.
 - If already translated for a language: do NOT write that language, do NOT flag as a miss.
 - Otherwise: look up the English value from the org query. If not found in org: add to "not in org" miss list.
 - If English value found: look it up (lowercased) in the master sheet.
@@ -264,27 +279,53 @@ def tooling_query(soql, instance_url, access_token, api_version):
   - If not in master but org has a translation: use the **org translation as fallback** (`final_es = org_es`, `final_pt = org_pt`). Set write flags accordingly.
   - If not in master AND no org translation: set `write_es=False`, `write_pt=False`, add to miss list.
 
-**For `plain_text` components:**
+**For truly new `plain_text` components** (no matching org label found in Step 7b):
 - Look up `raw_title` (lowercased) in master sheet.
-- If found AND the translation is different from the English (not a brand name kept as-is): mark as `plain_matched`. Set `write_es`/`write_pt`/`miss_es`/`miss_pt` flags.
+- If found AND the translation is different from the English (not a brand name kept as-is): mark as `plain_new_matched`. Set `write_es`/`write_pt`/`miss_es`/`miss_pt` flags.
 - If found but both ES and PT are identical to the English label: skip (brand name).
 - If not found: add to plain_unmatched miss list.
 
 ### Step 7d: Append custom label translations to the combined STF files
 
-Append to the **existing** `OBJECT_NAME_es.stf` and `OBJECT_NAME_pt_BR.stf` files (created in Step 6) — do not overwrite them:
+Regenerate (overwrite) the STF files completely rather than appending, so that LRP entries are cleanly included alongside the field/picklist entries. The `es_CO` file gets the same custom label translations as the `es` file (same Spanish source column).
 
 For each language, write `customLabel.<api_name>\t<translation>\n` for:
 1. `custom_label` components where `write_es`/`write_pt` is True — key = `customLabel.<label_api_name>`.
-2. `plain_matched` components where `write_es`/`write_pt` is True — key = `customLabel.<derived_api_name>`.
+2. `already_existing` plain_text components where `write_es`/`write_pt` is True — key = `customLabel.<actual_org_label_name>`.
+3. `plain_new_matched` components where `write_es`/`write_pt` is True — key = `customLabel.<derived_api_name>`.
 
 Deduplicate keys before writing.
 
-**If any `plain_matched` entries exist**, also generate:
+### Step 7e: Generate the custom labels review Excel (always generate this file)
 
-For each `plain_matched` entry, build the `categories` value using this naming convention:
+Always generate `OUTPUT_DIR/OBJECT_NAME_new_custom_labels_review.xlsx` with **two tabs**:
+
+**Tab 1 — New_Labels_Required**
+
+Columns: `Full Name (API) | Short Description | English Value | Component Type | LRP Page(s) | Action Required | Notes`
+
+Only include entries for `plain_new_matched` components — i.e. plain-text labels with **no matching org label found** in Step 7b. One row per new label (deduplicated; list all LRP pages in the LRP Page(s) column, comma-separated).
+
+If there are no truly new labels, include a single informational row stating: *"All LRP components already have existing Custom Labels in this org. No new labels need to be created. See Tab 2 for the label syntax to use in each LRP page."*
+
+**Tab 2 — Label_Reference** *(developer copy-paste reference)*
+
+Columns: `Current Plain Text | Label API Name | Label Syntax (copy this) | Component Type | LRP Page | Currently Plain Text? | ES Translation | ES_CO Translation | PT_BR Translation`
+
+Include **every** LRP component (one row per component × LRP page combination) across all three categories:
+- `custom_label` components — already using `{!$Label...}`, mark "Currently Plain Text?" = `No — already uses {!$Label...} syntax` (green)
+- `already_existing` plain_text components — mark "Currently Plain Text?" = `YES — needs updating to label syntax` (orange)
+- `plain_new_matched` / `plain_unmatched` components — mark as `YES — needs updating to label syntax` (orange)
+
+The **Label Syntax** column should contain the copy-paste ready `{!$Label.<ApiName>}` string, styled in a distinct font/color for easy identification.
+
+Populate ES, ES_CO, PT_BR translation columns from `trans_map` (existing org translations). Show `"(not yet translated)"` if empty.
+
+**If any `plain_new_matched` entries exist**, also generate:
+
+For each `plain_new_matched` entry, build the `categories` value using this naming convention:
 `OnStar:<OBJECT_NAME>:<TypeOfComponent>:<raw_title>`
-Where `TypeOfComponent` = `Tabs` if `component_type` is `Tab`, or `Flexcard` if `component_type` is `RelatedList`.
+Where `TypeOfComponent` = `Tabs` if `component_type` is `Tab`, or `RelatedList` if `component_type` is `RelatedList`.
 
 - `OUTPUT_DIR/OBJECT_NAME_new_custom_labels.labels-meta.xml`:
   ```xml
@@ -292,7 +333,7 @@ Where `TypeOfComponent` = `Tabs` if `component_type` is `Tab`, or `Flexcard` if 
   <CustomLabels xmlns="http://soap.sforce.com/2006/04/metadata">
       <labels>
           <fullName><derived_api_name></fullName>
-          <categories>OnStar:OBJECT_NAME:TypeOfComponent:raw_title</categories>
+          <categories>OnStar:OBJECT_NAME:Tabs_or_RelatedList:raw_title</categories>
           <language>en_US</language>
           <protected>false</protected>
           <shortDescription><raw_title (XML-escaped)></shortDescription>
@@ -301,14 +342,13 @@ Where `TypeOfComponent` = `Tabs` if `component_type` is `Tab`, or `Flexcard` if 
       ...
   </CustomLabels>
   ```
-- `OUTPUT_DIR/OBJECT_NAME_new_custom_labels_review.xlsx` — columns: `fullName | categories | language | protected | shortDescription | value`. Populate `categories` with `OnStar:<OBJECT_NAME>:<TypeOfComponent>:<raw_title>` for each row.
 
-If the review Excel and XML were generated, tell the user:
+Tell the user:
 > **Action required before importing the STF:**
-> 1. Review `OBJECT_NAME_new_custom_labels_review.xlsx` — verify the new custom label definitions look correct.
-> 2. Deploy `OBJECT_NAME_new_custom_labels.labels-meta.xml` to the org:
+> 1. Review `OBJECT_NAME_new_custom_labels_review.xlsx` — Tab 1 shows any new labels to create; Tab 2 shows the label syntax for every LRP component so developers can update the flexipages.
+> 2. If Tab 1 has new labels: deploy `OBJECT_NAME_new_custom_labels.labels-meta.xml` to the org:
 >    `sf project deploy start --source-dir path/to/customLabels/`
-> 3. Update the LRP flexipage to reference `{!$Label.ApiName}` instead of plain-text tab titles.
+> 3. Update each LRP flexipage to reference `{!$Label.ApiName}` instead of plain-text titles (use Tab 2 as the reference).
 > 4. Then import the STF files into Translation Workbench.
 
 Report ES/PT entries written, miss count, and new custom label count.
@@ -325,8 +365,10 @@ From `unmatched_fields`: Type = "Custom Field", Reason = "Not found in master sh
 
 From `matched_fields` with issues: Type = "Custom Field". Check each:
 - If `multi_value_es`: Reason includes "Spanish: multiple values in cell (needs manual review)".
+- Else if `spanish` exceeds 40 characters: Reason includes "Spanish: translation exceeds 40 characters".
 - Else if `spanish` is empty: Reason includes "Spanish: empty".
 - If `multi_value_pt`: Reason includes "Portuguese: multiple values in cell (needs manual review)".
+- Else if `portuguese` exceeds 40 characters: Reason includes "Portuguese: translation exceeds 40 characters".
 - Else if `portuguese` is empty: Reason includes "Portuguese: empty".
 - Only add a row if there are issues. Join multiple issues with "; ".
 
@@ -355,14 +397,16 @@ Translation files generated for [OBJECT_NAME]:
 
   Combined STF Files (import into Translation Workbench):
     OUTPUT_DIR/OBJECT_NAME_es.stf       — Spanish (fields, picklists[, custom labels])
+    OUTPUT_DIR/OBJECT_NAME_es_CO.stf    — Spanish Colombia (fields, picklists[, custom labels])
     OUTPUT_DIR/OBJECT_NAME_pt_BR.stf    — Portuguese (fields, picklists[, custom labels])
 
   Miss Report:
     OUTPUT_DIR/OBJECT_NAME_miss_report.xlsx  — Field_Picklist tab[, LRP_Labels tab]
 
-  [If LRP was processed and new custom labels were needed:]
+  [If LRP was processed:]
+    OUTPUT_DIR/OBJECT_NAME_new_custom_labels_review.xlsx      — Tab 1: new labels to create (if any); Tab 2: label syntax reference for all LRP components
+    [If truly new labels are needed:]
     OUTPUT_DIR/OBJECT_NAME_new_custom_labels.labels-meta.xml  — deploy before importing STF
-    OUTPUT_DIR/OBJECT_NAME_new_custom_labels_review.xlsx      — review before deploying
 
 [Print match/skip/miss counts from each step]
 ```
