@@ -1304,43 +1304,74 @@ def generate_labels_xml(new_labels, component_name):
     return '\n'.join(lines)
 
 
-def write_review_excel(all_labels, output_path):
+def write_review_excel(all_labels, excluded_labels, output_path):
     """
     Write a review Excel with columns:
-      API Name | English Value | Status | Existing API Name
+      API Name | English Value | Element Type | Status | Existing API Name | Notes
     Colour coding:
       Green  — truly new (will be in XML)
       Yellow — already exists in org (excluded from XML)
+      Grey   — excluded from XML (Option Labels / API names — informational only)
     """
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Custom Labels Review"
 
-    headers  = ['API Name', 'English Value', 'Status', 'Existing API Name in Org']
+    headers  = ['API Name', 'English Value', 'Element Type', 'Status',
+                 'Existing API Name in Org', 'Notes']
     HDR_FILL = PatternFill("solid", fgColor="1F3864")
     HDR_FONT = Font(bold=True, color="FFFFFF")
     NEW_FILL = PatternFill("solid", fgColor="C6EFCE")   # green  — new
     EXI_FILL = PatternFill("solid", fgColor="FFEB9C")   # yellow — exists
+    EXC_FILL = PatternFill("solid", fgColor="D9D9D9")   # grey   — excluded
 
     for j, h in enumerate(headers, 1):
         c = ws.cell(1, j, h)
         c.fill = HDR_FILL
         c.font = HDR_FONT
 
-    for i, lbl in enumerate(all_labels, 2):
+    row_idx = 2
+    for lbl in all_labels:
         is_new = lbl['status'] == 'New'
         fill   = NEW_FILL if is_new else EXI_FILL
-        row    = [lbl['api_name'], lbl['value'], lbl['status'],
-                  lbl.get('existing_api_name', '')]
+        row    = [lbl['api_name'], lbl['value'], lbl.get('element_type', ''),
+                  lbl['status'], lbl.get('existing_api_name', ''), '']
         for j, v in enumerate(row, 1):
-            c = ws.cell(i, j, v)
-            c.fill = fill
+            ws.cell(row_idx, j, v).fill = fill
+        row_idx += 1
 
-    col_widths = [35, 70, 20, 35]
+    if excluded_labels:
+        note_cell = ws.cell(row_idx, 1,
+            "--- EXCLUDED (not Custom Labels — translate via component's own translation mechanism) ---")
+        note_cell.font = Font(bold=True, italic=True)
+        row_idx += 1
+        for lbl in excluded_labels:
+            row = [lbl.get('api_name', ''), lbl['value'], lbl.get('element_type', ''),
+                   'Excluded', '', lbl.get('note', '')]
+            for j, v in enumerate(row, 1):
+                ws.cell(row_idx, j, v).fill = EXC_FILL
+            row_idx += 1
+
+    col_widths = [35, 70, 18, 20, 35, 55]
     for j, w in enumerate(col_widths, 1):
         ws.column_dimensions[get_column_letter(j)].width = w
     ws.freeze_panes = "A2"
     wb.save(output_path)
+
+
+# Element types that should NOT become Custom Labels.
+# These belong to the component definition and are translated via
+# OmniScript / Screen Flow / FlexCard translation, not via Custom Labels.
+NON_CUSTOM_LABEL_TYPES = {
+    'Option Label',   # Select/picklist choices — translated inside OmniScript definition
+    'ParseError',
+}
+
+# API-style names: PascalCase with no spaces — these are technical element names,
+# not user-visible UI text, so they are never translated as Custom Labels.
+def _is_api_name(text):
+    import re as _re
+    return bool(_re.match(r'^[A-Z][a-zA-Z0-9]+\d*$', text) and ' ' not in text)
 
 
 if __name__ == '__main__':
@@ -1360,13 +1391,50 @@ if __name__ == '__main__':
         print("No unmatched labels — skipping Custom Label generation.")
         sys.exit(0)
 
-    print(f"Checking {len(unmatched)} unmatched label(s) against org Custom Label values...")
+    # ── Separate Option Labels / API names from real Custom Label candidates ──
+    excluded_labels = []
+    candidate_labels = []
+    for el in unmatched:
+        label = (el.get('label') or '').strip()
+        etype = el.get('element_type', '')
+        if not label:
+            continue
+        if etype in NON_CUSTOM_LABEL_TYPES:
+            excluded_labels.append({
+                'api_name':     derive_api_name(label),
+                'value':        label,
+                'element_type': etype,
+                'note':         'Translate via OmniScript Translation Workbench (not a Custom Label)',
+            })
+        elif _is_api_name(label):
+            excluded_labels.append({
+                'api_name':     label,
+                'value':        label,
+                'element_type': etype,
+                'note':         'Technical element name — not user-visible UI text',
+            })
+        else:
+            candidate_labels.append(el)
+
+    print(f"Unmatched total          : {len(unmatched)}")
+    print(f"Excluded (Option Labels) : {len([e for e in excluded_labels if e['element_type'] in NON_CUSTOM_LABEL_TYPES])}")
+    print(f"Excluded (API names)     : {len([e for e in excluded_labels if _is_api_name(e['value'])])}")
+    print(f"Custom Label candidates  : {len(candidate_labels)}")
+
+    if not candidate_labels:
+        print("No Custom Label candidates — skipping XML generation.")
+        review_path = out_dir / f"{cname}_new_custom_labels_review.xlsx"
+        write_review_excel([], excluded_labels, str(review_path))
+        print(f"Review Excel   : {review_path}")
+        sys.exit(0)
+
+    print(f"Checking {len(candidate_labels)} candidate(s) against org Custom Label values...")
     org_lookup = query_org_custom_label_values(args.target_org)
 
-    all_labels  = []   # for review Excel (all unmatched)
+    all_labels  = []   # for review Excel (candidates only)
     new_labels  = []   # for XML (truly missing from org)
 
-    for el in unmatched:
+    for el in candidate_labels:
         label     = (el.get('label') or '').strip()
         label_key = label.lower()
         api_name  = derive_api_name(label)
@@ -1374,23 +1442,25 @@ if __name__ == '__main__':
         if label_key in org_lookup:
             existing_name = org_lookup[label_key]
             all_labels.append({
-                'api_name':         api_name,
-                'value':            label,
-                'status':           'Exists in Org',
+                'api_name':          api_name,
+                'value':             label,
+                'element_type':      el.get('element_type', ''),
+                'status':            'Exists in Org',
                 'existing_api_name': existing_name,
             })
         else:
             all_labels.append({
-                'api_name':         api_name,
-                'value':            label,
-                'status':           'New',
+                'api_name':          api_name,
+                'value':             label,
+                'element_type':      el.get('element_type', ''),
+                'status':            'New',
                 'existing_api_name': '',
             })
             new_labels.append({'api_name': api_name, 'value': label})
 
     # Write review Excel
     review_path = out_dir / f"{cname}_new_custom_labels_review.xlsx"
-    write_review_excel(all_labels, str(review_path))
+    write_review_excel(all_labels, excluded_labels, str(review_path))
     print(f"Review Excel   : {review_path}")
 
     # Write XML only if there are truly new labels
