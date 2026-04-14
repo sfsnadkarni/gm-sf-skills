@@ -1,7 +1,7 @@
 ---
 name: sf-translate-screenflows-omni
 description: >
-  Generate Salesforce STF translation files (Spanish / Portuguese) for Screen Flows,
+  Generate Salesforce STF translation files (Spanish (Colombia) / Spanish (Mexico) / Portuguese (Brazil)) for Screen Flows,
   OmniScripts, and FlexCards. Extracts all UI text elements directly from the org,
   resolves embedded components recursively to the nth level, matches labels against a
   master Excel translation sheet, and produces STF files ready for Translation Workbench import.
@@ -72,15 +72,17 @@ Ask the user for the following in a single message:
 1. **Component type** — `Screen Flow`, `OmniScript`, `FlexCard`, or `Auto-detect`
    (default: `Auto-detect`)
 2. **Master Excel Sheet path** — translation reference file
-   (Col C = English source, Col D = Spanish, Col E = Portuguese)
+   (Col C = English source, Col D = Spanish, Col E = Portuguese (Brazil))
 3. **Output directory** — where to save all generated files
    (default: `~/Desktop/sf-translation-output`)
-4. **(Optional) Existing Spanish STF** — a previously downloaded Bilingual STF for Spanish;
+4. **(Optional) Existing Spanish (Colombia) STF** — a previously downloaded Bilingual STF for `es_CO`;
    already-translated keys are skipped. Press Enter to skip.
-5. **(Optional) Existing Portuguese STF** — a previously downloaded Bilingual STF for Portuguese;
+5. **(Optional) Existing Spanish (Mexico) STF** — a previously downloaded Bilingual STF for `es_MX`;
+   already-translated keys are skipped. Press Enter to skip.
+6. **(Optional) Existing Portuguese (Brazil) STF** — a previously downloaded Bilingual STF for `pt_BR`;
    already-translated keys are skipped. Press Enter to skip.
 
-Store as: COMPONENT_TYPE, MASTER_PATH, OUTPUT_DIR, EXISTING_ES, EXISTING_PT.
+Store as: COMPONENT_TYPE, MASTER_PATH, OUTPUT_DIR, EXISTING_ES_CO, EXISTING_ES_MX, EXISTING_PT_BR.
 
 If the user skips OUTPUT_DIR, use `~/Desktop/sf-translation-output`.
 Expand `~` and create the directory:
@@ -932,12 +934,20 @@ For Screen Flows: generates FlowDefinition-type STF entries.
 For OmniScripts / FlexCards: generates CustomLabel-type STF entries
   (since Omni components require custom labels for Translation Workbench).
 
+Produces three STF files per run:
+  - COMPONENT_NAME_es_CO.stf   — Spanish (Colombia)
+  - COMPONENT_NAME_es_MX.stf   — Spanish (Mexico)
+  - COMPONENT_NAME_pt_BR.stf   — Portuguese (Brazil)
+
+Both Spanish variants use the same Spanish translation column (Col D) from the master
+sheet; only the language code in the STF header differs.
+
 Usage:
   python3 generate_stf.py \
     --matches PATH_TO_matches.json \
     --component-name NAME \
     --output-dir OUTPUT_DIR \
-    [--existing-es PATH] [--existing-pt PATH]
+    [--existing-es-co PATH] [--existing-es-mx PATH] [--existing-pt-br PATH]
 """
 import argparse, json, re
 from pathlib import Path
@@ -963,7 +973,7 @@ def load_existing_stf_keys(stf_path):
 def sanitize_stf_label(text):
     return re.sub(r'[\r\n\t]', ' ', text).strip()
 
-def generate_stf_flow(matched, component_name, existing_keys, lang_index):
+def generate_stf_flow(matched, component_name, existing_keys, master_lang_key, lang_code, lang_label):
     """
     Generate STF lines for Screen Flow translations.
     STF format for flows:
@@ -979,12 +989,13 @@ def generate_stf_flow(matched, component_name, existing_keys, lang_index):
     lines = [f"# Salesforce Translation File",
              f"# Component: {component_name}",
              f"# Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+             f"# Language: {lang_label} ({lang_code})",
              f"# Type: FlowDefinition", ""]
 
     by_location = {}
     for m in matched:
         label  = m.get('label','').strip()
-        transl = m.get('es' if lang_index == 0 else 'pt','').strip()
+        transl = m.get(master_lang_key,'').strip()
         key    = label.lower()
         if not label or not transl:
             continue
@@ -1003,7 +1014,7 @@ def generate_stf_flow(matched, component_name, existing_keys, lang_index):
 
     return '\n'.join(lines)
 
-def generate_stf_custom_labels(matched, component_name, existing_keys, lang_code, lang_index):
+def generate_stf_custom_labels(matched, component_name, existing_keys, master_lang_key, lang_code, lang_label):
     """
     Generate CustomLabel STF entries for OmniScript / FlexCard elements.
     STF format for custom labels:
@@ -1015,12 +1026,13 @@ def generate_stf_custom_labels(matched, component_name, existing_keys, lang_code
     lines = [f"# Salesforce Translation File",
              f"# Component: {component_name}",
              f"# Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
-             f"# Language: {lang_code}",
+             f"# Language: {lang_label}",
+             f"Language code: {lang_code}",
              f"# Type: CustomLabel", ""]
 
     for m in matched:
         label  = m.get('label','').strip()
-        transl = m.get('es' if lang_index == 0 else 'pt','').strip()
+        transl = m.get(master_lang_key,'').strip()
         key    = label.lower()
         if not label or not transl:
             continue
@@ -1037,58 +1049,66 @@ def generate_stf_custom_labels(matched, component_name, existing_keys, lang_code
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--matches',        required=True)
-    parser.add_argument('--component-name', required=True)
-    parser.add_argument('--output-dir',     required=True)
-    parser.add_argument('--existing-es',    default='')
-    parser.add_argument('--existing-pt',    default='')
+    parser.add_argument('--matches',          required=True)
+    parser.add_argument('--component-name',   required=True)
+    parser.add_argument('--output-dir',       required=True)
+    parser.add_argument('--existing-es-co',   default='')
+    parser.add_argument('--existing-es-mx',   default='')
+    parser.add_argument('--existing-pt-br',   default='')
     args = parser.parse_args()
 
     data    = json.loads(Path(args.matches).read_text())
     matched = data.get('matched', [])
     out_dir = Path(args.output_dir)
 
-    existing_es = load_existing_stf_keys(args.existing_es)
-    existing_pt = load_existing_stf_keys(args.existing_pt)
+    existing_es_co = load_existing_stf_keys(args.existing_es_co)
+    existing_es_mx = load_existing_stf_keys(args.existing_es_mx)
+    existing_pt_br = load_existing_stf_keys(args.existing_pt_br)
 
     # Determine majority component type
     from collections import Counter
-    type_counts = Counter(m.get('type','').lower() for m in matched)
+    type_counts  = Counter(m.get('type','').lower() for m in matched)
     primary_type = type_counts.most_common(1)[0][0] if type_counts else 'flow'
 
-    cname = args.component_name
-    es_out = out_dir / f"{cname}_es.stf"
-    pt_out = out_dir / f"{cname}_pt_BR.stf"
+    cname      = args.component_name
+    es_co_out  = out_dir / f"{cname}_es_CO.stf"
+    es_mx_out  = out_dir / f"{cname}_es_MX.stf"
+    pt_br_out  = out_dir / f"{cname}_pt_BR.stf"
 
+    # Both Spanish variants use Col D ('es') from the master sheet.
+    # Portuguese (Brazil) uses Col E ('pt').
     if 'flow' in primary_type:
-        es_content = generate_stf_flow(matched, cname, existing_es, 0)
-        pt_content = generate_stf_flow(matched, cname, existing_pt, 1)
+        es_co_content = generate_stf_flow(matched, cname, existing_es_co, 'es', 'es_CO', 'Spanish (Colombia)')
+        es_mx_content = generate_stf_flow(matched, cname, existing_es_mx, 'es', 'es_MX', 'Spanish (Mexico)')
+        pt_br_content = generate_stf_flow(matched, cname, existing_pt_br, 'pt', 'pt_BR', 'Portuguese (Brazil)')
     else:
-        es_content = generate_stf_custom_labels(matched, cname, existing_es, 'es', 0)
-        pt_content = generate_stf_custom_labels(matched, cname, existing_pt, 'pt_BR', 1)
+        es_co_content = generate_stf_custom_labels(matched, cname, existing_es_co, 'es', 'es_CO', 'Spanish (Colombia)')
+        es_mx_content = generate_stf_custom_labels(matched, cname, existing_es_mx, 'es', 'es_MX', 'Spanish (Mexico)')
+        pt_br_content = generate_stf_custom_labels(matched, cname, existing_pt_br, 'pt', 'pt_BR', 'Portuguese (Brazil)')
 
-    es_out.write_text(es_content, encoding='utf-8')
-    pt_out.write_text(pt_content, encoding='utf-8')
+    es_co_out.write_text(es_co_content, encoding='utf-8')
+    es_mx_out.write_text(es_mx_content, encoding='utf-8')
+    pt_br_out.write_text(pt_br_content, encoding='utf-8')
 
-    es_count = es_content.count('\t')
-    pt_count = pt_content.count('\t')
     print(f"STF generated:")
-    print(f"  Spanish  ({es_count} entries): {es_out}")
-    print(f"  Pt-BR    ({pt_count} entries): {pt_out}")
-    print(f"  Skipped (already translated): ES={len(existing_es)} PT={len(existing_pt)} keys")
+    print(f"  Spanish (Colombia) es_CO  ({es_co_content.count(chr(9))} entries): {es_co_out}")
+    print(f"  Spanish (Mexico)   es_MX  ({es_mx_content.count(chr(9))} entries): {es_mx_out}")
+    print(f"  Portuguese (Brazil) pt_BR ({pt_br_content.count(chr(9))} entries): {pt_br_out}")
+    print(f"  Already-translated keys skipped: es_CO={len(existing_es_co)}  es_MX={len(existing_es_mx)}  pt_BR={len(existing_pt_br)}")
 ```
 
-Build the command — include `--existing-es` and `--existing-pt` only if the user provided them:
+Build the command — include `--existing-*` flags only if the user provided the corresponding STF:
 ```bash
 python3 "OUTPUT_DIR/scripts/generate_stf.py" \
-  --matches        "OUTPUT_DIR/COMPONENT_NAME_matches.json" \
-  --component-name "COMPONENT_NAME" \
-  --output-dir     "OUTPUT_DIR" \
-  [--existing-es   "EXISTING_ES"] \
-  [--existing-pt   "EXISTING_PT"]
+  --matches          "OUTPUT_DIR/COMPONENT_NAME_matches.json" \
+  --component-name   "COMPONENT_NAME" \
+  --output-dir       "OUTPUT_DIR" \
+  [--existing-es-co  "EXISTING_ES_CO"] \
+  [--existing-es-mx  "EXISTING_ES_MX"] \
+  [--existing-pt-br  "EXISTING_PT_BR"]
 ```
 
-Report the printed summary (ES entries, PT entries, skipped keys).
+Report the printed summary (es_CO entries, es_MX entries, pt_BR entries, skipped keys per language).
 
 ---
 
@@ -1138,7 +1158,7 @@ if __name__ == '__main__':
                 'Location':         el.get('location',''),
                 'English Label':    el.get('label',''),
                 'Reason':           'No match found in master Excel',
-                'Suggested Action': 'Add to master Excel (Col C=English, Col D=Spanish, Col E=Portuguese) and re-run'
+                'Suggested Action': 'Add to master Excel (Col C=English, Col D=Spanish, Col E=Portuguese (Brazil)) and re-run'
             })
 
     # Partial-match entries
@@ -1149,20 +1169,20 @@ if __name__ == '__main__':
             writer = csv.DictWriter(f, fieldnames=[
                 'Component', 'Type', 'Element Type', 'Location',
                 'UI Label', 'Matched Master English', 'Match Quality',
-                'Spanish', 'Portuguese'
+                'Spanish (es_CO / es_MX)', 'Portuguese (pt_BR)'
             ])
             writer.writeheader()
             for m in partials:
                 writer.writerow({
-                    'Component':             m.get('component',''),
-                    'Type':                  m.get('type',''),
-                    'Element Type':          m.get('element_type',''),
-                    'Location':              m.get('location',''),
-                    'UI Label':              m.get('label',''),
-                    'Matched Master English':m.get('master_en',''),
-                    'Match Quality':         m.get('match_type',''),
-                    'Spanish':               m.get('es',''),
-                    'Portuguese':            m.get('pt',''),
+                    'Component':               m.get('component',''),
+                    'Type':                    m.get('type',''),
+                    'Element Type':            m.get('element_type',''),
+                    'Location':                m.get('location',''),
+                    'UI Label':                m.get('label',''),
+                    'Matched Master English':  m.get('master_en',''),
+                    'Match Quality':           m.get('match_type',''),
+                    'Spanish (es_CO / es_MX)': m.get('es',''),
+                    'Portuguese (pt_BR)':       m.get('pt',''),
                 })
         print(f"Partial matches: {len(partials)} entries → {partial_path}")
 
@@ -1179,6 +1199,235 @@ python3 "OUTPUT_DIR/scripts/miss_report.py" \
 
 ---
 
+## Step 8: Verify Missing Labels Against Org and Generate Custom Label Deployment Files
+
+Take the unmatched labels from the miss report and check whether each one **already
+exists in the org** as a Custom Label by exact-matching its English text against the
+`Value` field of every `ExternalString` record in the org.
+
+Only labels whose value does **not** already exist in the org are written to the
+deployment XML. Labels that are already present (under any API name) are noted in the
+review Excel but excluded from the XML.
+
+Write the following Python script to `OUTPUT_DIR/scripts/verify_and_gen_labels.py`
+and run it:
+
+```python
+#!/usr/bin/env python3
+"""
+Verify unmatched UI labels against existing Custom Labels in the org (exact value match).
+Generates a deployable labels-meta.xml and a review Excel only for truly new labels.
+
+Usage:
+  python3 verify_and_gen_labels.py \
+    --matches        PATH_TO_matches.json \
+    --component-name COMPONENT_NAME \
+    --output-dir     OUTPUT_DIR \
+    --target-org     SELECTED_ORG
+"""
+import argparse, json, re, subprocess, sys
+from pathlib import Path
+from datetime import datetime
+from xml.sax.saxutils import escape
+
+import openpyxl
+from openpyxl.styles import Font, PatternFill
+from openpyxl.utils import get_column_letter
+
+
+def query_org_custom_label_values(target_org):
+    """
+    Return a dict { value_lower_stripped: api_name } for every Custom Label in the org.
+    Uses the Tooling API (ExternalString). Falls back to standard SOQL if Tooling fails.
+    """
+    soql = "SELECT Name, Value FROM ExternalString LIMIT 50000"
+
+    # Try Tooling API first
+    for use_tooling in (True, False):
+        cmd = [
+            "sf", "data", "query",
+            "--query", soql,
+            "--target-org", target_org,
+            "--json",
+        ]
+        if use_tooling:
+            cmd.append("--use-tooling-api")
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            data = json.loads(result.stdout or "{}")
+            records = (data.get("result", {}) or {}).get("records", [])
+            if records or data.get("status") == 0:
+                lookup = {}
+                for rec in records:
+                    val = (rec.get("Value") or "").strip()
+                    name = rec.get("Name", "")
+                    if val:
+                        lookup[val.lower()] = name
+                print(f"  Loaded {len(lookup)} existing Custom Label values from org "
+                      f"({'Tooling' if use_tooling else 'Standard'} API)")
+                return lookup
+        except Exception as e:
+            print(f"  WARN: query attempt failed ({e})", file=sys.stderr)
+
+    print("  WARN: Could not load Custom Labels from org — all unmatched treated as new",
+          file=sys.stderr)
+    return {}
+
+
+def derive_api_name(text):
+    """Derive a valid Custom Label API name from free text (max 40 chars)."""
+    name = re.sub(r'[^a-zA-Z0-9_]', '_', text[:40])
+    name = re.sub(r'_+', '_', name).strip('_')
+    return name or "Label"
+
+
+def generate_labels_xml(new_labels, component_name):
+    """Build a CustomLabels metadata XML string."""
+    lines = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<CustomLabels xmlns="http://soap.sforce.com/2006/04/metadata">',
+    ]
+    for lbl in new_labels:
+        short_desc = escape(lbl['value'][:80])
+        value_esc  = escape(lbl['value'])
+        lines += [
+            '    <labels>',
+            f'        <fullName>{lbl["api_name"]}</fullName>',
+            f'        <categories>ScreenFlow:{escape(component_name)}</categories>',
+            '        <language>en_US</language>',
+            '        <protected>false</protected>',
+            f'        <shortDescription>{short_desc}</shortDescription>',
+            f'        <value>{value_esc}</value>',
+            '    </labels>',
+        ]
+    lines.append('</CustomLabels>')
+    return '\n'.join(lines)
+
+
+def write_review_excel(all_labels, output_path):
+    """
+    Write a review Excel with columns:
+      API Name | English Value | Status | Existing API Name
+    Colour coding:
+      Green  — truly new (will be in XML)
+      Yellow — already exists in org (excluded from XML)
+    """
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Custom Labels Review"
+
+    headers  = ['API Name', 'English Value', 'Status', 'Existing API Name in Org']
+    HDR_FILL = PatternFill("solid", fgColor="1F3864")
+    HDR_FONT = Font(bold=True, color="FFFFFF")
+    NEW_FILL = PatternFill("solid", fgColor="C6EFCE")   # green  — new
+    EXI_FILL = PatternFill("solid", fgColor="FFEB9C")   # yellow — exists
+
+    for j, h in enumerate(headers, 1):
+        c = ws.cell(1, j, h)
+        c.fill = HDR_FILL
+        c.font = HDR_FONT
+
+    for i, lbl in enumerate(all_labels, 2):
+        is_new = lbl['status'] == 'New'
+        fill   = NEW_FILL if is_new else EXI_FILL
+        row    = [lbl['api_name'], lbl['value'], lbl['status'],
+                  lbl.get('existing_api_name', '')]
+        for j, v in enumerate(row, 1):
+            c = ws.cell(i, j, v)
+            c.fill = fill
+
+    col_widths = [35, 70, 20, 35]
+    for j, w in enumerate(col_widths, 1):
+        ws.column_dimensions[get_column_letter(j)].width = w
+    ws.freeze_panes = "A2"
+    wb.save(output_path)
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--matches',        required=True)
+    parser.add_argument('--component-name', required=True)
+    parser.add_argument('--output-dir',     required=True)
+    parser.add_argument('--target-org',     required=True)
+    args = parser.parse_args()
+
+    data      = json.loads(Path(args.matches).read_text())
+    unmatched = data.get('unmatched', [])
+    out_dir   = Path(args.output_dir)
+    cname     = args.component_name
+
+    if not unmatched:
+        print("No unmatched labels — skipping Custom Label generation.")
+        sys.exit(0)
+
+    print(f"Checking {len(unmatched)} unmatched label(s) against org Custom Label values...")
+    org_lookup = query_org_custom_label_values(args.target_org)
+
+    all_labels  = []   # for review Excel (all unmatched)
+    new_labels  = []   # for XML (truly missing from org)
+
+    for el in unmatched:
+        label     = (el.get('label') or '').strip()
+        label_key = label.lower()
+        api_name  = derive_api_name(label)
+
+        if label_key in org_lookup:
+            existing_name = org_lookup[label_key]
+            all_labels.append({
+                'api_name':         api_name,
+                'value':            label,
+                'status':           'Exists in Org',
+                'existing_api_name': existing_name,
+            })
+        else:
+            all_labels.append({
+                'api_name':         api_name,
+                'value':            label,
+                'status':           'New',
+                'existing_api_name': '',
+            })
+            new_labels.append({'api_name': api_name, 'value': label})
+
+    # Write review Excel
+    review_path = out_dir / f"{cname}_new_custom_labels_review.xlsx"
+    write_review_excel(all_labels, str(review_path))
+    print(f"Review Excel   : {review_path}")
+
+    # Write XML only if there are truly new labels
+    if new_labels:
+        xml_path = out_dir / f"{cname}_new_custom_labels.labels-meta.xml"
+        xml_path.write_text(generate_labels_xml(new_labels, cname), encoding='utf-8')
+        print(f"Deployment XML : {xml_path}  ({len(new_labels)} new label(s))")
+    else:
+        print("All unmatched labels already exist in the org — no XML generated.")
+
+    exists_count = len(all_labels) - len(new_labels)
+    print(f"\nSummary:")
+    print(f"  Unmatched labels checked : {len(unmatched)}")
+    print(f"  Already exist in org     : {exists_count}  (excluded from XML)")
+    print(f"  Truly new (added to XML) : {len(new_labels)}")
+```
+
+Run:
+```bash
+python3 "OUTPUT_DIR/scripts/verify_and_gen_labels.py" \
+  --matches        "OUTPUT_DIR/COMPONENT_NAME_matches.json" \
+  --component-name "COMPONENT_NAME" \
+  --output-dir     "OUTPUT_DIR" \
+  --target-org     "SELECTED_ORG"
+```
+
+If `_new_custom_labels.labels-meta.xml` was generated, tell the user:
+> **Action required before importing the STF files:**
+> 1. Review `COMPONENT_NAME_new_custom_labels_review.xlsx`:
+>    - **Green rows** — new Custom Labels that will be deployed (verify API names look correct)
+>    - **Yellow rows** — labels already present in the org under the shown API name (no action needed)
+> 2. Deploy the new Custom Labels to the org:
+>    `sf project deploy start --source-dir path/to/force-app/main/default/customLabels/`
+> 3. Then import the STF files into Translation Workbench.
+
+---
+
 ## Final Summary
 
 Tell the user:
@@ -1192,31 +1441,36 @@ Translation files generated for [COMPONENT_NAME(S)]:
     OUTPUT_DIR/COMPONENT_NAME_matches.json              — Internal match data
 
   Translation Files (import into Translation Workbench):
-    OUTPUT_DIR/COMPONENT_NAME_es.stf                    — Spanish translations  (N entries)
-    OUTPUT_DIR/COMPONENT_NAME_pt_BR.stf                 — Portuguese translations (N entries)
+    OUTPUT_DIR/COMPONENT_NAME_es_CO.stf                 — Spanish (Colombia) translations  (N entries)
+    OUTPUT_DIR/COMPONENT_NAME_es_MX.stf                 — Spanish (Mexico) translations    (N entries)
+    OUTPUT_DIR/COMPONENT_NAME_pt_BR.stf                 — Portuguese (Brazil) translations (N entries)
 
   Review Items:
-    OUTPUT_DIR/COMPONENT_NAME_miss_report.csv           — Labels with no translation found (N items)
-    OUTPUT_DIR/COMPONENT_NAME_partial_matches.csv       — Partial matches needing human review (N items)
-    [if any]
+    OUTPUT_DIR/COMPONENT_NAME_miss_report.csv                   — Labels with no translation found (N items)
+    OUTPUT_DIR/COMPONENT_NAME_partial_matches.csv               — Partial matches needing human review (N items)
+    OUTPUT_DIR/COMPONENT_NAME_new_custom_labels_review.xlsx     — Custom label org-check results (green=new, yellow=already exists)
+    [if any new labels were found:]
+    OUTPUT_DIR/COMPONENT_NAME_new_custom_labels.labels-meta.xml — Deploy to org BEFORE importing STF files
 
   Metadata Files:
     OUTPUT_DIR/metadata/                                — All retrieved flow/omni/flexcard XML/JSON
 
 Counts:
-  - Components resolved:       N (including N embedded)
-  - UI elements extracted:     N (N certain + N reviewed in-scope)
-  - Matched to master:         N  (N exact + N partial)
-  - Missing translations:      N  → add to master Excel and re-run
-  - Skipped (NoCop/excluded):  N
+  - Components resolved:              N (including N embedded)
+  - UI elements extracted:            N (N certain + N reviewed in-scope)
+  - Matched to master:                N  (N exact + N partial)
+  - Missing translations:             N  → add to master Excel and re-run
+  - Unmatched labels checked vs org:  N  (N already exist in org, N truly new)
+  - Skipped (excluded):               N
 
 To import translations into Salesforce:
-  1. Log in to Setup → Translation Workbench → Export
-  2. Import the generated .stf files via Setup → Translation Workbench → Import
-  3. For OmniScript/FlexCard (CustomLabel STF): deploy any new Custom Labels first if prompted
+  1. [If new custom labels XML was generated] Deploy custom labels first:
+     sf project deploy start --source-dir path/to/customLabels/
+  2. Log in to Setup → Translation Workbench → Import
+  3. Import all three .stf files (es_CO, es_MX, pt_BR)
 ```
 
 If any `unmatched` items exist, add:
 > **Action required:** N labels have no translation in the master Excel.
 > See `COMPONENT_NAME_miss_report.csv` — add the missing entries to the master sheet
-> (Col C = English, Col D = Spanish, Col E = Portuguese) and re-run from Step 5.
+> (Col C = English, Col D = Spanish, Col E = Portuguese (Brazil)) and re-run from Step 5.
