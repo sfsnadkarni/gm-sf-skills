@@ -922,179 +922,291 @@ Report the printed summary (matched count, unmatched count).
 
 ## Step 6: Generate STF Translation Files
 
+**Important — Correct Salesforce Bilingual STF Format:**
+The STF files used by Salesforce Translation Workbench are **Bilingual** format, not a custom import format.
+The required structure is:
+```
+# [standard header comments]
+Language code: es_CO
+Type: Bilingual
+Translation type: Metadata
+
+------------------TRANSLATED-------------------
+
+# KEY	LABEL	TRANSLATION	OUT OF DATE
+CustomLabel.ApiName	English text	Spanish translation	-
+
+------------------OUTDATED AND UNTRANSLATED-----------------
+
+# KEY	LABEL
+CustomLabel.ApiName	English text
+```
+
+For **OmniScripts and FlexCards**, translations are backed by Custom Labels.
+The KEY must be `CustomLabel.<ActualOrgApiName>` — resolved by querying `ExternalString` in the org.
+
+For **Screen Flows**, the KEY follows the Salesforce flow translation key format:
+`Flow.Flow.<FlowApiName>.<Version>.<ScreenName>.Field.<FieldName>.<Type>`
+
 Write the following Python script to `OUTPUT_DIR/scripts/generate_stf.py` and run it:
 
 ```python
 #!/usr/bin/env python3
 """
-Generate Salesforce STF translation files for Screen Flow, OmniScript, and FlexCard
-UI elements from the matches JSON produced by match_master.py.
+Generate Salesforce Bilingual STF translation files.
 
-For Screen Flows: generates FlowDefinition-type STF entries.
-For OmniScripts / FlexCards: generates CustomLabel-type STF entries
-  (since Omni components require custom labels for Translation Workbench).
+Correct format (matches Translation Workbench export/import):
+  Language code: es_CO
+  Type: Bilingual
+  Translation type: Metadata
 
-Produces three STF files per run:
-  - COMPONENT_NAME_es_CO.stf   — Spanish (Colombia)
-  - COMPONENT_NAME_es_MX.stf   — Spanish (Mexico)
-  - COMPONENT_NAME_pt_BR.stf   — Portuguese (Brazil)
+  ------------------TRANSLATED-------------------
+  # KEY\tLABEL\tTRANSLATION\tOUT OF DATE
+  CustomLabel.ApiName\tEnglish Text\tTranslation\t-
 
-Both Spanish variants use the same Spanish translation column (Col D) from the master
-sheet; only the language code in the STF header differs.
+  ------------------OUTDATED AND UNTRANSLATED-----------------
+  # KEY\tLABEL
+  CustomLabel.ApiName\tEnglish Text
+
+For OmniScripts/FlexCards: keys are resolved by looking up the English text
+against ExternalString (Custom Labels) in the org.
+For Screen Flows: keys use the Salesforce flow translation key format.
 
 Usage:
-  python3 generate_stf.py \
-    --matches PATH_TO_matches.json \
-    --component-name NAME \
-    --output-dir OUTPUT_DIR \
+  python3 generate_stf.py \\
+    --matches PATH_TO_matches.json \\
+    --component-name NAME \\
+    --output-dir OUTPUT_DIR \\
+    --target-org ORG_ALIAS \\
     [--existing-es-co PATH] [--existing-es-mx PATH] [--existing-pt-br PATH]
 """
-import argparse, json, re
+import argparse, json, re, subprocess, sys
 from pathlib import Path
 from datetime import datetime
 
-def load_existing_stf_keys(stf_path):
-    """Return set of already-translated keys from an existing bilingual STF."""
+STF_HEADER = """\
+# Use the Bilingual file to review translations, edit labels that have already been translated, and add translations for labels that haven't been translated.
+# - The TRANSLATED section of the file contains the text that has been translated and needs to be reviewed.
+# - The OUTDATED AND UNTRANSLATED section of the file contains text that hasn't been translated. You can replace untranslated labels in the LABEL column with translated values.
+
+# The Out of Date indicators are:
+# - An asterisk (*): The label is out of date. A change was made to the default language label and the translation hasn't been updated.
+# - A dash (-): The translation is current.
+
+# Notes:
+# Don't add columns to or remove columns from this file.
+# Tabs (\\t), new lines (\\n) and carriage returns (\\r) are represented by special characters in this file. These characters should be preserved in the import file to maintain formatting.
+# Lines that begin with the # symbol are ignored during import.
+# Salesforce translation files are exported in the UTF-8 encoding to support extended and double-byte characters. This encoding cannot be changed."""
+
+def query_custom_label_api_names(target_org):
+    """Return dict {value_lower: api_name} by querying ExternalString via Tooling API."""
+    soql = "SELECT Name, Value FROM ExternalString LIMIT 50000"
+    for use_tooling in (True, False):
+        cmd = ["sf", "data", "query", "--query", soql, "--target-org", target_org, "--json"]
+        if use_tooling:
+            cmd.append("--use-tooling-api")
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            raw = r.stdout
+            idx = raw.find('{')
+            data = json.loads(raw[idx:] if idx >= 0 else raw or "{}")
+            recs = (data.get("result", {}) or {}).get("records", [])
+            if recs or data.get("status") == 0:
+                lu = {}
+                for rec in recs:
+                    v = (rec.get("Value") or "").strip()
+                    if v:
+                        lu[v.lower()] = rec.get("Name", "")
+                print(f"  Loaded {len(lu)} Custom Label API names ({'Tooling' if use_tooling else 'Standard'} API)")
+                return lu
+        except Exception as e:
+            print(f"  WARN: {e}", file=sys.stderr)
+    return {}
+
+def load_existing_translated_keys(stf_path):
+    """Return set of fully-translated CustomLabel keys from an existing Bilingual STF."""
     keys = set()
     if not stf_path or not Path(stf_path).exists():
         return keys
-    in_block = False
+    in_translated = False
     for line in Path(stf_path).read_text(encoding='utf-8', errors='replace').splitlines():
-        line = line.strip()
-        if line.startswith('---'):
-            in_block = True
+        if 'TRANSLATED' in line and 'OUTDATED' not in line:
+            in_translated = True
             continue
-        if in_block and '\t' in line and not line.startswith('#'):
-            parts = line.split('\t')
-            if len(parts) >= 2 and parts[1].strip():
-                keys.add(parts[0].strip().lower())
+        if 'OUTDATED' in line or 'UNTRANSLATED' in line:
+            in_translated = False
+            continue
+        if not line.strip() or line.startswith('#'):
+            continue
+        parts = line.split('\t')
+        if parts[0].startswith('CustomLabel.') and in_translated:
+            if len(parts) >= 3 and parts[2].strip():
+                keys.add(parts[0].lower())
     return keys
 
-def sanitize_stf_label(text):
-    return re.sub(r'[\r\n\t]', ' ', text).strip()
+def sanitize(text):
+    return re.sub(r'[\r\n]', ' ', str(text)).strip()
 
-def generate_stf_flow(matched, component_name, existing_keys, master_lang_key, lang_code, lang_label):
+def generate_bilingual_stf_omni(matched, unmatched, org_api_names, existing_keys,
+                                 lang_key, lang_code, lang_label, component_name):
     """
-    Generate STF lines for Screen Flow translations.
-    STF format for flows:
-      # FlowDefinition
-      ---
-      # FLOW_API_NAME
-      # FlowScreen
-      # SCREEN_NAME
-      # FlowScreenField
-      # FIELD_NAME
-      ENGLISH_LABEL<TAB>TRANSLATED_LABEL
+    Bilingual STF for OmniScript / FlexCard (backed by Custom Labels).
+    KEY = CustomLabel.<ActualOrgApiName>
     """
-    lines = [f"# Salesforce Translation File",
-             f"# Component: {component_name}",
-             f"# Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
-             f"# Language: {lang_label} ({lang_code})",
-             f"# Type: FlowDefinition", ""]
+    now = datetime.now().strftime('%Y-%m-%d %H:%M')
+    lines = [
+        STF_HEADER,
+        f"# Component: {component_name}  |  Generated: {now}",
+        f"# Language: {lang_label}",
+        f"Language code: {lang_code}",
+        f"Type: Bilingual",
+        f"Translation type: Metadata",
+        "",
+    ]
 
-    by_location = {}
-    for m in matched:
-        label  = m.get('label','').strip()
-        transl = m.get(master_lang_key,'').strip()
-        key    = label.lower()
-        if not label or not transl:
+    translated_rows, untranslated_rows, skipped_no_api = [], [], []
+    seen_keys = set()
+
+    for m in list(matched) + list(unmatched):
+        label  = (m.get('label') or '').strip()
+        transl = (m.get(lang_key) or '').strip()
+        if not label:
             continue
-        if key in existing_keys:
+        api_name = org_api_names.get(label.lower())
+        if not api_name:
+            skipped_no_api.append(label)
             continue
-        loc  = m.get('location','')
-        by_location.setdefault(loc, []).append((label, transl))
+        full_key = f"CustomLabel.{api_name}"
+        if full_key.lower() in existing_keys or full_key.lower() in seen_keys:
+            continue
+        seen_keys.add(full_key.lower())
+        if transl:
+            translated_rows.append(f"{full_key}\t{sanitize(label)}\t{sanitize(transl)}\t-")
+        else:
+            untranslated_rows.append(f"{full_key}\t{sanitize(label)}")
 
-    for loc, pairs in sorted(by_location.items()):
-        parts = loc.split(' > ')
-        lines.append(f"# {' > '.join(parts)}")
-        lines.append("---")
-        for label, transl in pairs:
-            lines.append(f"{sanitize_stf_label(label)}\t{sanitize_stf_label(transl)}")
-        lines.append("")
+    lines.append("------------------TRANSLATED-------------------")
+    lines.append("")
+    lines.append("# KEY\tLABEL\tTRANSLATION\tOUT OF DATE")
+    lines.extend(translated_rows or ["# (no new translated entries)"])
+    lines.append("")
+    lines.append("------------------OUTDATED AND UNTRANSLATED-----------------")
+    lines.append("")
+    lines.append("# KEY\tLABEL")
+    lines.extend(untranslated_rows or ["# (no untranslated entries)"])
+    lines.append("")
 
-    return '\n'.join(lines)
+    return '\n'.join(lines), len(translated_rows), len(untranslated_rows), skipped_no_api
 
-def generate_stf_custom_labels(matched, component_name, existing_keys, master_lang_key, lang_code, lang_label):
+def generate_bilingual_stf_flow(matched, unmatched, existing_keys,
+                                 lang_key, lang_code, lang_label, component_name):
     """
-    Generate CustomLabel STF entries for OmniScript / FlexCard elements.
-    STF format for custom labels:
-      # CustomLabel
-      ---
-      LABEL_API_NAME
-      MASTER_LABEL<TAB>TRANSLATION
+    Bilingual STF for Screen Flows.
+    KEY = Flow.Flow.<ApiName>.<Version>.<Screen>.Field.<Field>.<Type>
+    Labels without a structured location key fall back to the raw location string.
     """
-    lines = [f"# Salesforce Translation File",
-             f"# Component: {component_name}",
-             f"# Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
-             f"# Language: {lang_label}",
-             f"Language code: {lang_code}",
-             f"# Type: CustomLabel", ""]
+    now = datetime.now().strftime('%Y-%m-%d %H:%M')
+    lines = [
+        STF_HEADER,
+        f"# Component: {component_name}  |  Generated: {now}",
+        f"# Language: {lang_label}",
+        f"Language code: {lang_code}",
+        f"Type: Bilingual",
+        f"Translation type: Metadata",
+        "",
+    ]
 
-    for m in matched:
-        label  = m.get('label','').strip()
-        transl = m.get(master_lang_key,'').strip()
-        key    = label.lower()
-        if not label or not transl:
-            continue
-        if key in existing_keys:
-            continue
-        api_name = re.sub(r'[^a-zA-Z0-9_]', '_', label[:40]).strip('_')
-        lines.append(f"# {m.get('location','')}")
-        lines.append("---")
-        lines.append(api_name)
-        lines.append(f"{sanitize_stf_label(label)}\t{sanitize_stf_label(transl)}")
-        lines.append("")
+    translated_rows, untranslated_rows = [], []
+    seen_keys = set()
 
-    return '\n'.join(lines)
+    for m in list(matched) + list(unmatched):
+        label  = (m.get('label') or '').strip()
+        transl = (m.get(lang_key) or '').strip()
+        loc    = (m.get('location') or '').strip()
+        if not label or not loc:
+            continue
+        full_key = loc  # location should be the full flow translation key
+        if full_key.lower() in existing_keys or full_key.lower() in seen_keys:
+            continue
+        seen_keys.add(full_key.lower())
+        if transl:
+            translated_rows.append(f"{full_key}\t{sanitize(label)}\t{sanitize(transl)}\t-")
+        else:
+            untranslated_rows.append(f"{full_key}\t{sanitize(label)}")
+
+    lines.append("------------------TRANSLATED-------------------")
+    lines.append("")
+    lines.append("# KEY\tLABEL\tTRANSLATION\tOUT OF DATE")
+    lines.extend(translated_rows or ["# (no new translated entries)"])
+    lines.append("")
+    lines.append("------------------OUTDATED AND UNTRANSLATED-----------------")
+    lines.append("")
+    lines.append("# KEY\tLABEL")
+    lines.extend(untranslated_rows or ["# (no untranslated entries)"])
+    lines.append("")
+
+    return '\n'.join(lines), len(translated_rows), len(untranslated_rows)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--matches',          required=True)
     parser.add_argument('--component-name',   required=True)
     parser.add_argument('--output-dir',       required=True)
+    parser.add_argument('--target-org',       required=True)
     parser.add_argument('--existing-es-co',   default='')
     parser.add_argument('--existing-es-mx',   default='')
     parser.add_argument('--existing-pt-br',   default='')
     args = parser.parse_args()
 
-    data    = json.loads(Path(args.matches).read_text())
-    matched = data.get('matched', [])
-    out_dir = Path(args.output_dir)
-
-    existing_es_co = load_existing_stf_keys(args.existing_es_co)
-    existing_es_mx = load_existing_stf_keys(args.existing_es_mx)
-    existing_pt_br = load_existing_stf_keys(args.existing_pt_br)
+    data      = json.loads(Path(args.matches).read_text())
+    matched   = data.get('matched', [])
+    unmatched = data.get('unmatched', [])
+    out_dir   = Path(args.output_dir)
+    cname     = args.component_name
 
     # Determine majority component type
     from collections import Counter
-    type_counts  = Counter(m.get('type','').lower() for m in matched)
-    primary_type = type_counts.most_common(1)[0][0] if type_counts else 'flow'
+    all_items    = matched + unmatched
+    type_counts  = Counter((m.get('type') or '').lower() for m in all_items)
+    primary_type = type_counts.most_common(1)[0][0] if type_counts else 'omniscript'
+    is_flow      = 'flow' in primary_type
 
-    cname      = args.component_name
-    es_co_out  = out_dir / f"{cname}_es_CO.stf"
-    es_mx_out  = out_dir / f"{cname}_es_MX.stf"
-    pt_br_out  = out_dir / f"{cname}_pt_BR.stf"
+    print(f"Component type: {'Screen Flow' if is_flow else 'OmniScript/FlexCard'}")
 
-    # Both Spanish variants use Col D ('es') from the master sheet.
-    # Portuguese (Brazil) uses Col E ('pt').
-    if 'flow' in primary_type:
-        es_co_content = generate_stf_flow(matched, cname, existing_es_co, 'es', 'es_CO', 'Spanish (Colombia)')
-        es_mx_content = generate_stf_flow(matched, cname, existing_es_mx, 'es', 'es_MX', 'Spanish (Mexico)')
-        pt_br_content = generate_stf_flow(matched, cname, existing_pt_br, 'pt', 'pt_BR', 'Portuguese (Brazil)')
+    if not is_flow:
+        print("Querying org for Custom Label API names...")
+        org_api_names = query_custom_label_api_names(args.target_org)
     else:
-        es_co_content = generate_stf_custom_labels(matched, cname, existing_es_co, 'es', 'es_CO', 'Spanish (Colombia)')
-        es_mx_content = generate_stf_custom_labels(matched, cname, existing_es_mx, 'es', 'es_MX', 'Spanish (Mexico)')
-        pt_br_content = generate_stf_custom_labels(matched, cname, existing_pt_br, 'pt', 'pt_BR', 'Portuguese (Brazil)')
+        org_api_names = {}
 
-    es_co_out.write_text(es_co_content, encoding='utf-8')
-    es_mx_out.write_text(es_mx_content, encoding='utf-8')
-    pt_br_out.write_text(pt_br_content, encoding='utf-8')
+    for lang_key, lang_code, lang_label, existing_stf in [
+        ('es', 'es_CO', 'Spanish (Colombia)',  args.existing_es_co),
+        ('es', 'es_MX', 'Spanish (Mexico)',    args.existing_es_mx),
+        ('pt', 'pt_BR', 'Portuguese (Brazil)', args.existing_pt_br),
+    ]:
+        existing_keys = load_existing_translated_keys(existing_stf)
+        out_path      = out_dir / f"{cname}_{lang_code}.stf"
 
-    print(f"STF generated:")
-    print(f"  Spanish (Colombia) es_CO  ({es_co_content.count(chr(9))} entries): {es_co_out}")
-    print(f"  Spanish (Mexico)   es_MX  ({es_mx_content.count(chr(9))} entries): {es_mx_out}")
-    print(f"  Portuguese (Brazil) pt_BR ({pt_br_content.count(chr(9))} entries): {pt_br_out}")
-    print(f"  Already-translated keys skipped: es_CO={len(existing_es_co)}  es_MX={len(existing_es_mx)}  pt_BR={len(existing_pt_br)}")
+        if is_flow:
+            content, n_tr, n_un = generate_bilingual_stf_flow(
+                matched, unmatched, existing_keys, lang_key, lang_code, lang_label, cname)
+            skipped = []
+        else:
+            content, n_tr, n_un, skipped = generate_bilingual_stf_omni(
+                matched, unmatched, org_api_names, existing_keys,
+                lang_key, lang_code, lang_label, cname)
+
+        out_path.write_text(content, encoding='utf-8')
+        print(f"  {lang_label:<28} ({lang_code}): "
+              f"{n_tr:2} translated  |  {n_un:2} untranslated  "
+              f"|  {len(existing_keys):5} already in existing STF  → {out_path.name}")
+        if skipped:
+            print(f"    ⚠  {len(skipped)} labels skipped (no Custom Label in org):")
+            for s in skipped[:5]:
+                print(f"       - {s[:80]!r}")
+            if len(skipped) > 5:
+                print(f"       ... and {len(skipped)-5} more")
 ```
 
 Build the command — include `--existing-*` flags only if the user provided the corresponding STF:
@@ -1103,6 +1215,7 @@ python3 "OUTPUT_DIR/scripts/generate_stf.py" \
   --matches          "OUTPUT_DIR/COMPONENT_NAME_matches.json" \
   --component-name   "COMPONENT_NAME" \
   --output-dir       "OUTPUT_DIR" \
+  --target-org       "TARGET_ORG_ALIAS" \
   [--existing-es-co  "EXISTING_ES_CO"] \
   [--existing-es-mx  "EXISTING_ES_MX"] \
   [--existing-pt-br  "EXISTING_PT_BR"]
