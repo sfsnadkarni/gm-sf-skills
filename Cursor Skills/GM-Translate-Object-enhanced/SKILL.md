@@ -198,7 +198,7 @@ python3 /path/to/generate_stf.py \
 ### 6c: What the script does (do not reimplement)
 
 - Parses the bilingual UNTRANSLATED section as the source of truth for keys
-- Strictly filters to `OBJECT_NAME` keys only (+ GVS picklists)
+- Strictly filters to `OBJECT_NAME` keys only (+ GVS picklists) — **`PicklistValue.Standard.*` keys are NOT covered by this filter; they are handled in Step 6d**
 - Accepted key types: `CustomField`, `PicklistValue`, `LayoutSection`, `RecordType`, `QuickAction`, `CustomLabel`, `ButtonOrLink`
 - Skips keys already in the TRANSLATED section (already done in org)
 - Looks up each source label in the master sheet
@@ -208,6 +208,131 @@ python3 /path/to/generate_stf.py \
 - Generates `<object>_over40_report.txt` for entries that were too long
 
 Report the written/skipped counts shown by the script output.
+
+### 6d: Append Standard Picklist Values (PicklistValue.Standard.*)
+
+`generate_stf.py` strictly filters to keys whose object segment matches `OBJECT_NAME`. Standard picklist fields (e.g. `Case.Status`, `Case.Priority`, `Case.Type`) are exported by Translation Workbench under the key prefix `PicklistValue.Standard.<fieldNameCamelCase>.*` — they are **never** matched by the object-name filter and will be silently skipped unless handled here.
+
+> **Important — the bilingual STF is a full-org export.** It contains `PicklistValue.Standard.*` keys for every standard object in the org (e.g. `leadStatus`, `accountType`, `opportunityStage`). You must **not** blindly include all of them when the input object is `Case` — that would pollute the Case STF files with translations for unrelated objects. An explicit allowlist of key prefixes derived from the input object's own standard picklist fields is required.
+
+#### 6d-i: Derive the allowlist of Standard.* key prefixes for OBJECT_NAME
+
+Translation Workbench uses the camelCase convention `<objectNameLower><FieldNamePascal>` as the field segment in the key. For example:
+- `Case` + `Status`   → `PicklistValue.Standard.caseStatus.*`
+- `Case` + `Priority` → `PicklistValue.Standard.casePriority.*`
+- `Lead` + `Status`   → `PicklistValue.Standard.leadStatus.*`  *(excluded when object is Case)*
+
+Use the `sf sobject describe` output already retrieved in Step 4 to find every **standard** (non-`__c`) picklist field on `OBJECT_NAME`:
+
+```python
+def derive_standard_picklist_prefixes(describe_fields, object_name):
+    """Return a set of PicklistValue.Standard.<prefix> strings for every
+    standard picklist field on the object, using Salesforce's camelCase convention."""
+    obj_lower = object_name[0].lower() + object_name[1:]   # e.g. "Case" → "case"
+    prefixes = set()
+    for f in describe_fields:
+        if f['name'].endswith('__c'):
+            continue   # custom field — handled by generate_stf.py
+        if f.get('type') not in ('picklist', 'multipicklist'):
+            continue
+        if not f.get('picklistValues'):
+            continue
+        field_name = f['name']                                          # e.g. "Status"
+        # Salesforce STF key convention: objectLower + FieldPascal
+        stf_segment = obj_lower + field_name[0].upper() + field_name[1:]  # e.g. "caseStatus"
+        prefixes.add(f"PicklistValue.Standard.{stf_segment}.")
+    return prefixes
+```
+
+#### 6d-ii: Filter and append
+
+```python
+def get_standard_picklist_untranslated(bilingual_path, allowed_prefixes):
+    """Return (key, source_label) pairs from the UNTRANSLATED section
+    whose key starts with one of the allowed_prefixes."""
+    entries = []
+    section = None
+    with open(bilingual_path, 'r', encoding='utf-8') as f:
+        for line in f:
+            line = line.rstrip('\n').rstrip('\r')
+            if '-' * 5 in line and 'TRANSLATED' in line:
+                section = 'untranslated' if ('OUTDATED' in line or 'UNTRANSLATED' in line) else 'translated'
+                continue
+            if not line or line.startswith('#') or line.startswith('Language') or line.startswith('Type'):
+                continue
+            parts = line.split('\t')
+            key = parts[0].strip()
+            if section == 'untranslated' and any(key.startswith(p) for p in allowed_prefixes):
+                source = parts[1].strip() if len(parts) > 1 else ''
+                entries.append((key, source))
+    return entries
+
+def match_and_append_standard_picklists(bilingual_es, bilingual_pt, allowed_prefixes,
+                                         master_lookup, out_dir, object_name):
+    es_entries = get_standard_picklist_untranslated(bilingual_es, allowed_prefixes) if bilingual_es else []
+    pt_entries = get_standard_picklist_untranslated(bilingual_pt, allowed_prefixes) if bilingual_pt else []
+
+    def load_existing_keys(stf_path):
+        keys = set()
+        try:
+            with open(stf_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    parts = line.rstrip().split('\t')
+                    if parts and parts[0] and '.' in parts[0]:
+                        keys.add(parts[0].strip())
+        except FileNotFoundError:
+            pass
+        return keys
+
+    es_stf = str(Path(out_dir) / f"{object_name}_es_CO.stf")
+    pt_stf = str(Path(out_dir) / f"{object_name}_pt_BR.stf")
+    existing_es = load_existing_keys(es_stf)
+    existing_pt = load_existing_keys(pt_stf)
+
+    def process(entries, lang_key, stf_path, existing_keys):
+        written, misses = [], []
+        with open(stf_path, 'a', encoding='utf-8') as f:
+            for key, source in entries:
+                if key in existing_keys:
+                    continue  # already written by generate_stf.py
+                master = master_lookup.get(source.lower())
+                if not master:
+                    misses.append((key, source, 'Not found in master sheet'))
+                    continue
+                trans = master.get(lang_key, '')
+                if not trans:
+                    misses.append((key, source, 'Empty in master sheet'))
+                    continue
+                if ',' in trans:
+                    misses.append((key, source, 'Multi-value in master sheet'))
+                    continue
+                if len(trans) > 40:
+                    misses.append((key, source, f'Translation exceeds 40 characters ({len(trans)})'))
+                    continue
+                f.write(f"{key}\t{source}\t{trans}\t-\n")
+                written.append((key, source, trans))
+        return written, misses
+
+    es_written, es_miss = process(es_entries, 'spanish',    es_stf, existing_es)
+    pt_written, pt_miss = process(pt_entries, 'portuguese', pt_stf, existing_pt)
+
+    print(f"[Standard picklists] Allowed prefixes: {sorted(allowed_prefixes)}")
+    print(f"[Standard picklists] es_CO: {len(es_written)} written, {len(es_miss)} missed")
+    print(f"[Standard picklists] pt_BR: {len(pt_written)} written, {len(pt_miss)} missed")
+    return es_written, pt_written, es_miss, pt_miss
+```
+
+Call these immediately after `generate_stf.py` completes, passing `allowed_prefixes` derived from the Step 4 describe fields:
+
+```python
+allowed_prefixes = derive_standard_picklist_prefixes(describe_fields, OBJECT_NAME)
+match_and_append_standard_picklists(
+    EXISTING_ES_CO, EXISTING_PT, allowed_prefixes,
+    master_lookup, OUTPUT_DIR, OBJECT_NAME
+)
+```
+
+**Add misses from this step to the `Field_Picklist` tab of the miss report** (Type = `"Standard Picklist Value"`). Include key, source label, and reason for each miss.
 
 ---
 
