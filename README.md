@@ -145,6 +145,14 @@ The skill supports dry-run and execute policies for data-changing actions and ca
 
 ---
 
+### `technical-architecture-review`
+
+Generates evidence-based Salesforce Technical Architect notes from a Jira story. The Cursor skill combines acceptance criteria, vetted GM historical and integration context from Glean, and implementation evidence from Salesforce metadata. It produces traceability, risks, recommendations, and optional Mermaid flow or sequence diagrams.
+
+Copy `Cursor Skills/technical-architecture-review` into your project's `.cursor/skills` directory. The skill requires authenticated Jira, Glean, and Salesforce MCP connections for the complete workflow.
+
+---
+
 ## Updating
 
 ```bash
