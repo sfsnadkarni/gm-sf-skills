@@ -131,6 +131,20 @@ python3 run.py sf-org-assessment
 
 ---
 
+### `ac-verification`
+
+Runs evidence-based UAT against a live Salesforce org. The Cursor skill retrieves acceptance criteria from Jira, drives an isolated Chrome session with Playwright, verifies the criteria as a selected persona, and generates a PDF report with screenshots and Pass, Fail, or Inconclusive verdicts.
+
+Copy `Cursor Skills/ac-verification` into your project's `.cursor/skills` directory. Install the runtime dependencies:
+
+```bash
+python3 -m pip install playwright reportlab
+```
+
+The skill supports dry-run and execute policies for data-changing actions and can verify localized experiences in English, Spanish, and Portuguese.
+
+---
+
 ## Updating
 
 ```bash
